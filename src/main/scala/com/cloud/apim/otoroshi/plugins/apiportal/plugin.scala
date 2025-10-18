@@ -127,7 +127,7 @@ class OtoroshiApiPortal extends NgBackendCall {
       case None => BackendCallResponse(NgPluginHttpResponse.fromResult(Results.NotFound("API ref not found")), None).rightf
       case Some(ref) => env.datastores.apiDataStore.findById(ref) flatMap {
         case None => BackendCallResponse(NgPluginHttpResponse.fromResult(Results.NotFound("API not found")), None).rightf
-        case Some(api) => api.documentation match {
+        case Some(api) => api.copy(documentation = ApiDocumentationExample.value.some).resolveDocumentation() flatMap { // TODO: remove example
           case Some(doc) if doc.enabled => {
             val prefix = config.prefix.getOrElse("")
             val path = ctx.request.path.replaceFirst(prefix, "").toLowerCase()
@@ -137,6 +137,7 @@ class OtoroshiApiPortal extends NgBackendCall {
               case ("post", "/api/apikeys") => OtoroshiApiPortal.serveCreateApikey(api, ctx, config).map(r => BackendCallResponse(NgPluginHttpResponse.fromResult(r), None).right)
               case ("get",  "/api/apikeys") => OtoroshiApiPortal.serveAllApikeys(api, ctx, config).map(r => BackendCallResponse(NgPluginHttpResponse.fromResult(r), None).right)
               case ("post", "/api/_test") => OtoroshiApiPortal.serveApiTester(api, ctx, config).map(r => BackendCallResponse(NgPluginHttpResponse.fromResult(r), None).right)
+              case ("get", "/api/documentation") => OtoroshiApiPortal.serveDocumentationJson(api, doc, ctx, config).map(r => BackendCallResponse(NgPluginHttpResponse.fromResult(r), None).right)
               case ("get", "/subscriptions/apikeys") => OtoroshiApiPortal.serveApikeysPage(api, doc, ctx, config).map(r => BackendCallResponse(NgPluginHttpResponse.fromResult(r), None).right)
               case ("get", "/subscriptions") => OtoroshiApiPortal.serveApikeysPage(api, doc, ctx, config).map(r => BackendCallResponse(NgPluginHttpResponse.fromResult(r), None).right)
               case ("get", "/tester") => OtoroshiApiPortal.serveTesterPage(api, doc, ctx, config).map(r => BackendCallResponse(NgPluginHttpResponse.fromResult(r), None).right)
@@ -186,7 +187,7 @@ object OtoroshiApiPortal {
   }
   def serveHome(api: Api, doc: ApiDocumentation, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(implicit  env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
     handleRedirections(doc, "/") {
-      renderResource(doc.home).map {
+      renderResource(doc.home, doc).map {
         case (body, contentType) =>
           Results.Ok(baseTemplate(s"${api.name} - Portal", config.prefix.getOrElse(""), api, doc, ctx)(body.utf8String)).as("text/html")
       }
@@ -205,7 +206,7 @@ object OtoroshiApiPortal {
           }.head
           allResources.find(_.path.contains(head.link)) match {
             case Some(resource) => {
-              renderResource(resource).map {
+              renderResource(resource, doc).map {
                 case (body, contentType) =>
                   val template = documentationPageTemplate(
                     s"${api.name} - ${resource.title.getOrElse("Documentation")}",
@@ -224,7 +225,7 @@ object OtoroshiApiPortal {
           }
         }
         case None => Results.NotFound("Not found 2 !").vfuture
-        case Some(resource) => renderResource(resource).map {
+        case Some(resource) => renderResource(resource, doc).map {
           case (body, contentType) =>
             if (resource.site_page) {
               val foundNavTop = doc.navigation.find(_.path.exists(str => path.startsWith(str)))
@@ -345,6 +346,17 @@ object OtoroshiApiPortal {
   def serveTesterPage(api: Api, doc: ApiDocumentation, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(implicit  env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
     Results.Ok(baseTemplate(s"${api.name} - Subscriptions", config.prefix.getOrElse(""), api, doc, ctx)("")).as("text/html").vfuture
   }
+  def serveDocumentationJson(api: Api, doc: ApiDocumentation, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(implicit  env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
+    Results.Ok(doc.json.asObject ++ Json.obj(
+      "name" -> api.name,
+      "description" -> api.description,
+      "api_tags" -> api.tags,
+      "api_metadata" -> api.metadata,
+      "doc_tags" -> doc.tags,
+      "doc_metadata" -> doc.metadata,
+    )).as("text/javascript").vfuture
+  }
+
   def serveApikeysPage(api: Api, doc: ApiDocumentation, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(implicit  env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
     api.consumers.find(c => c.status == ApiConsumerStatus.Published) match {
       case None => Results.Ok(baseTemplate(s"${api.name} - Subscriptions", config.prefix.getOrElse(""), api, doc, ctx)("")).as("text/html").vfuture
@@ -508,7 +520,6 @@ object OtoroshiApiPortal {
   def serveCreateApikey(api: Api, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(implicit  env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
     ctx.request.body.runFold(ByteString.empty)(_ ++ _).flatMap { body =>
       val bodyJson = Json.parse(body.utf8String)
-      println(bodyJson.prettify)
       val consumer_id = bodyJson.select("consumer").as[String]
       val nameOpt = bodyJson.select("name").asOpt[String]
       val descriptionOpt = bodyJson.select("description").asOpt[String]
@@ -660,7 +671,6 @@ object OtoroshiApiPortal {
   def serveUpdateApikey(api: Api, client_id: String, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(implicit  env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
     ctx.request.body.runFold(ByteString.empty)(_ ++ _).flatMap { body =>
       val bodyJson = Json.parse(body.utf8String)
-      println(bodyJson.prettify)
       val nameOpt = bodyJson.select("name").asOpt[String]
       val descriptionOpt = bodyJson.select("description").asOpt[String]
       val enabledOpt = bodyJson.select("enabled").asOpt[Boolean]
@@ -717,23 +727,23 @@ object OtoroshiApiPortal {
 
   //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-  def renderResourceAsIcon(resource: Option[ApiDocumentationResource], style: Option[String] = None): String = {
+  def renderResourceAsIcon(resource: Option[ApiDocumentationResource], doc: ApiDocumentation, style: Option[String] = None): String = {
     resource match {
-      case Some(resource) if resource.text_content.isDefined => s"""<i class="${resource.text_content.get}"></i> """
-      case Some(resource) if resource.url.isDefined => s"""<img src="${resource.url.get}" style="${resource.raw.select("style").asOptString.orElse(style).getOrElse("")}" /> """
+      case Some(resource) if resource.css_icon_class.isDefined => s"""<i class="${resource.css_icon_class.get}"></i> """
+      case Some(resource) if resource.resolveUrl(doc).isDefined => s"""<img src="${resource.resolveUrl(doc).get}" style="${resource.raw.select("style").asOptString.orElse(style).getOrElse("")}" /> """
       case Some(resource) if resource.base64_content.isDefined => s"""<img src="data:${resource.contentType};base64,${resource.base64_content.get}" style="${resource.raw.select("style").asOptString.orElse(style).getOrElse("")}" /> """
       case _ => ""
     }
   }
 
-  def renderResource(resource: ApiDocumentationResource)(implicit  env: Env, ec: ExecutionContext, mat: Materializer): Future[(ByteString, String)] = {
+  def renderResource(resource: ApiDocumentationResource, doc: ApiDocumentation)(implicit  env: Env, ec: ExecutionContext, mat: Materializer): Future[(ByteString, String)] = {
     def handleTransform(byteString: ByteString): ByteString = {
       // TODO: handle EL
       if (resource.transform.contains("markdown")) {
         ByteString(s"""<zero-md><script type="text/markdown">${byteString.utf8String}</script></zero-md>""".stripMargin)
       } else if (resource.transform.contains("redoc")) {
         ByteString(s"""<redoc
-                      |   spec-url="${resource.url.getOrElse("#")}"
+                      |   spec-url="${resource.path.headOption.getOrElse("#")}"
                       |   hideHostname="false"
                       |   showObjectSchemaExamples="true"
                       |></redoc>""".stripMargin)
@@ -741,29 +751,14 @@ object OtoroshiApiPortal {
         byteString
       }
     }
-    resource.url match {
-      case Some(url) => env.Ws.url(url).withFollowRedirects(true).withRequestTimeout(20.seconds).get() map { resp =>
-        //if (url == "https://rickandmorty.zuplo.io/openapi.json") {
-        //  ((resp.json.asObject ++ Json.obj(
-        //    "servers" -> Json.arr(
-        //      Json.obj(
-        //        "url" -> "https://rickandmorty.zuplo.io/dev/v1",
-        //        "description" -> "The dev API endpoint",
-        //      ),
-        //      Json.obj(
-        //        "url" -> "https://rickandmorty.zuplo.io/staging/v1",
-        //        "description" -> "The staging API endpoint",
-        //      ),
-        //      Json.obj(
-        //        "url" -> "https://rickandmorty.zuplo.io/v1",
-        //        "description" -> "The prod API endpoint",
-        //      )
-        //    )
-        //  )).prettify.byteString, resource.contentType)
-        //} else {
+    resource.resolveUrl(doc) match {
+      case Some(url) => env.Ws.url(url)
+        .withFollowRedirects(resource.httpFollowRedirects)
+        .withHttpHeaders(resource.httpHeaders.toSeq: _*)
+        .withRequestTimeout(resource.httpTimeout)
+        .get() map { resp =>
           (handleTransform(resp.bodyAsBytes), resource.contentType)
-        //}
-      } // TODO: add more options
+        }
       case None => {
         resource.base64_content match {
           case Some(bs) => (bs, resource.contentType).vfuture
@@ -790,7 +785,7 @@ object OtoroshiApiPortal {
            |    </div>
            |    <nav id="docSidebar" class="collapse d-lg-block">
            |      <div class="nav flex-column gap-2">
-           |        ${sidebarTemplate(sidebar, prefix, ctx)}
+           |        ${sidebarTemplate(sidebar, prefix, doc, ctx)}
            |      </div>
            |    </nav>
            |  </div>
@@ -807,25 +802,25 @@ object OtoroshiApiPortal {
          |""".stripMargin)
   }
 
-  def sidebarCategoryTemplate(item: ApiDocumentationSidebarCategory, prefix: String, index: Int, ctx: NgbBackendCallContext): String = {
+  def sidebarCategoryTemplate(item: ApiDocumentationSidebarCategory, prefix: String, index: Int, doc: ApiDocumentation, ctx: NgbBackendCallContext): String = {
     s"""<div class="nav-section sidebar-section">
        |  <button class="btn btn-toggle w-100 text-start" data-bs-toggle="collapse" data-bs-target="#section-${index}">
-       |    <i class="bi bi-chevron-right"></i> ${renderResourceAsIcon(item.icon)}${item.label}
+       |    <i class="bi bi-chevron-right"></i> ${renderResourceAsIcon(item.icon, doc)}${item.label}
        |  </button>
        |  <div id="section-${index}" class="collapse show ps-3 mt-2">
-       |    ${item.links.map(l => sidebarLinkTemplate(l, prefix, ctx)).mkString("\n")}
+       |    ${item.links.map(l => sidebarLinkTemplate(l, prefix, doc, ctx)).mkString("\n")}
        |  </div>
        |</div>""".stripMargin
   }
 
-  def sidebarLinkTemplate(item: ApiDocumentationSidebarLink, prefix: String, ctx: NgbBackendCallContext): String = {
-    s"""<a class="nav-link ${if(ctx.request.path == s"${prefix}${item.link}") "active" else ""}" style="font-weight: ${if(ctx.request.path == s"${prefix}${item.link}") "600" else "normal"}" href="${prefix}${item.link}">${renderResourceAsIcon(item.icon)}${item.label}</a>""".stripMargin
+  def sidebarLinkTemplate(item: ApiDocumentationSidebarLink, prefix: String, doc: ApiDocumentation, ctx: NgbBackendCallContext): String = {
+    s"""<a class="nav-link ${if(ctx.request.path == s"${prefix}${item.link}") "active" else ""}" style="font-weight: ${if(ctx.request.path == s"${prefix}${item.link}") "600" else "normal"}" href="${prefix}${item.link}">${renderResourceAsIcon(item.icon, doc)}${item.label}</a>""".stripMargin
   }
 
-  def sidebarTemplate(sidebar: ApiDocumentationSidebar, prefix: String, ctx: NgbBackendCallContext): String = {
+  def sidebarTemplate(sidebar: ApiDocumentationSidebar, prefix: String, doc: ApiDocumentation, ctx: NgbBackendCallContext): String = {
     sidebar.items.zipWithIndex.map {
-      case (item @ ApiDocumentationSidebarCategory(_), idx) => sidebarCategoryTemplate(item, prefix, idx, ctx)
-      case (item @ ApiDocumentationSidebarLink(_), idx) => sidebarLinkTemplate(item, prefix, ctx)
+      case (item @ ApiDocumentationSidebarCategory(_), idx) => sidebarCategoryTemplate(item, prefix, idx, doc, ctx)
+      case (item @ ApiDocumentationSidebarLink(_), idx) => sidebarLinkTemplate(item, prefix, doc, ctx)
     }.mkString("\n")
   }
 
@@ -846,7 +841,7 @@ object OtoroshiApiPortal {
        |    <meta charset="utf-8" />
        |    <meta name="viewport" content="width=device-width, initial-scale=1" />
        |    <title>${title}</title>
-       |    <link rel="icon" href="${prefix}${doc.logo.url.getOrElse("#")}">
+       |    <link rel="icon" href="${prefix}${doc.logo.path.headOption.getOrElse("#")}">
        |    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB" crossorigin="anonymous">
        |    <link  href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet" type="text/css" />
        |    <style>
@@ -975,7 +970,7 @@ object OtoroshiApiPortal {
        |    <nav class="navbar is-sticky navbar-expand-lg" style="height: 120px; flex-direction: column;">
        |      <div class="container-xxl">
        |        <a class="navbar-brand fw-bold" href="${prefix}/">
-       |          ${renderResourceAsIcon(doc.logo.some, Some("max-height: 45px;"))}${api.name}
+       |          ${renderResourceAsIcon(doc.logo.some, doc, Some("max-height: 45px;"))}${api.name}
        |        </a>
        |        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#mainNav">
        |          <span class="navbar-toggler-icon"></span>
@@ -1012,7 +1007,7 @@ object OtoroshiApiPortal {
        |      <div style="width: 100vw; border-top: 1px solid var(--bs-border-color); height: 5px;"></div>
        |      <div class="container-xxl" style="">
        |        <ul class="navbar-nav me-3">
-       |          ${doc.navigation.map(nav => s"""<li class="nav-item"><a class="nav-link ${navPathActive(nav.path, ctx, prefix)}" href="${prefix}${nav.path.headOption.getOrElse("#")}">${renderResourceAsIcon(nav.icon, Some("max-height: 35px"))}${nav.label}</a></li>""").mkString("\n")}
+       |          ${doc.navigation.map(nav => s"""<li class="nav-item"><a class="nav-link ${navPathActive(nav.path, ctx, prefix)}" href="${prefix}${nav.path.headOption.getOrElse("#")}">${renderResourceAsIcon(nav.icon, doc, Some("max-height: 35px"))}${nav.label}</a></li>""").mkString("\n")}
        |          <li class="nav-item"><a class="nav-link ${navPathActive(Seq("/api-references"), ctx, prefix)}" href="${prefix}/api-references">API Reference</a></li>
        |          ${if (ctx.user.isDefined && api.consumers.exists(_.consumerKind != ApiConsumerKind.Keyless)) {
                     s"""<li class="nav-item"><a class="nav-link ${navPathActive(Seq("/subscriptions"), ctx, prefix)}" href="${prefix}/subscriptions">Subscriptions</a></li>"""
