@@ -137,10 +137,11 @@ class OtoroshiApiPortal extends NgBackendCall {
               case ("post", "/api/apikeys") => OtoroshiApiPortal.serveCreateApikey(api, ctx, config).map(r => BackendCallResponse(NgPluginHttpResponse.fromResult(r), None).right)
               case ("get",  "/api/apikeys") => OtoroshiApiPortal.serveAllApikeys(api, ctx, config).map(r => BackendCallResponse(NgPluginHttpResponse.fromResult(r), None).right)
               case ("post", "/api/_test") => OtoroshiApiPortal.serveApiTester(api, ctx, config).map(r => BackendCallResponse(NgPluginHttpResponse.fromResult(r), None).right)
+              case ("get", "/api/plans") => OtoroshiApiPortal.servePlansJson(api, doc, ctx, config).map(r => BackendCallResponse(NgPluginHttpResponse.fromResult(r), None).right)
               case ("get", "/api/documentation") => OtoroshiApiPortal.serveDocumentationJson(api, doc, ctx, config).map(r => BackendCallResponse(NgPluginHttpResponse.fromResult(r), None).right)
+              /////////////////////
               case ("get", "/subscriptions/apikeys") => OtoroshiApiPortal.serveApikeysPage(api, doc, ctx, config).map(r => BackendCallResponse(NgPluginHttpResponse.fromResult(r), None).right)
               case ("get", "/subscriptions") => OtoroshiApiPortal.serveApikeysPage(api, doc, ctx, config).map(r => BackendCallResponse(NgPluginHttpResponse.fromResult(r), None).right)
-              case ("get", "/tester") => OtoroshiApiPortal.serveTesterPage(api, doc, ctx, config).map(r => BackendCallResponse(NgPluginHttpResponse.fromResult(r), None).right)
               case ("get", "/portal.js") => OtoroshiApiPortal.serverJs(api, ctx, config).map(r => BackendCallResponse(NgPluginHttpResponse.fromResult(r), None).right)
               case ("get", path) if path.startsWith("/api-references/") => OtoroshiApiPortal.serveApiDoc(api, doc, Some(path.replaceFirst("/api-references", "")), ctx, config).map(r => BackendCallResponse(NgPluginHttpResponse.fromResult(r), None).right)
               case ("get", "/api-references") => OtoroshiApiPortal.serveApiDoc(api, doc, None, ctx, config).map(r => BackendCallResponse(NgPluginHttpResponse.fromResult(r), None).right)
@@ -301,8 +302,8 @@ object OtoroshiApiPortal {
                    |          const button = document.createElement('button');
                    |          button.type = "button";
                    |          button.className = "btn btn-success";
-                   |          button.textContent = "Test endpoint";
-                   |          button.setAttribute('style', "--bs-btn-padding-y: 0.08rem;--bs-btn-padding-x: 0.2rem;--bs-btn-font-size: 0.7rem;margin-bottom: 5px;");
+                   |          button.innerHTML = "Test endpoint <i class=\\"bi bi-play-circle\\"></i>";
+                   |          button.setAttribute('style', "--bs-btn-padding-y: 0.08rem;--bs-btn-padding-x: 0.2rem;--bs-btn-font-size: 0.7rem;margin-bottom: 10px;");
                    |          button.addEventListener('click', function() {
                    |            console.log('test', node);
                    |            const verb = node.childNodes[1].childNodes[0].childNodes[0].getAttribute('type').toUpperCase();
@@ -349,25 +350,20 @@ object OtoroshiApiPortal {
   def serverJs(api: Api, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(implicit  env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
     Results.Ok("console.log('portal loaded !')").as("text/javascript").vfuture
   }
-  def serveTesterPage(api: Api, doc: ApiDocumentation, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(implicit  env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
-    Results.Ok(baseTemplate(s"${api.name} - Subscriptions", config.prefix.getOrElse(""), api, doc, ctx)(
-      s"""
-         |<button class="btn btn-primary"
-         |  onclick="openApiTester({ url: 'https://wines-api-sandbox-01j0vgh9zmnnzdmzn8jxbc40pe.cloud-apim.dev/api/regions', method: 'GET' })">
-         |  Tester l’API
-         |</button>
-         |
-         |""".stripMargin)).as("text/html").vfuture
+
+  def servePlansJson(api: Api, doc: ApiDocumentation, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(implicit  env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
+    Results.Ok(JsArray(doc.plans.map(_.raw))).vfuture
   }
+
   def serveDocumentationJson(api: Api, doc: ApiDocumentation, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(implicit  env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
-    Results.Ok(doc.json.asObject ++ Json.obj(
+    Results.Ok(doc.json.asObject - "source" ++ Json.obj(
       "name" -> api.name,
       "description" -> api.description,
       "api_tags" -> api.tags,
       "api_metadata" -> api.metadata,
       "doc_tags" -> doc.tags,
       "doc_metadata" -> doc.metadata,
-    )).as("text/javascript").vfuture
+    )).vfuture
   }
 
   def serveApikeysPage(api: Api, doc: ApiDocumentation, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(implicit  env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
@@ -397,6 +393,7 @@ object OtoroshiApiPortal {
              |    </thead>
              |    <tbody>
              |      ${apikeys.zipWithIndex.map { tuple =>
+
                       s"""<tr>
                          |  <th scope="row">${tuple._2}</th>
                          |  <td>${tuple._1._2.clientName}</td>
@@ -405,6 +402,11 @@ object OtoroshiApiPortal {
                          |    <div class="btn-group">
                          |      <button class="btn btn-sm btn-outline-success apikey-edit" title="edit apikey"
                          |        data-client-id="${tuple._1._2.clientId}"
+                         |        data-name="${tuple._1._2.clientName}"
+                         |        data-description="${tuple._1._2.description}"
+                         |        data-bearer="${tuple._1._2.toBearer()}"
+                         |        data-enabled="${tuple._1._2.enabled}"
+                         |        data-plan="${tuple._1._2.metadata.get("otoroshi-api-plan-ref").get}"
                          |        data-sub="${tuple._1._1.id}"
                          |        data-consumer="${consumer.id}"
                          |      ><i class="bi bi-pencil-square"></i></button>
@@ -429,43 +431,51 @@ object OtoroshiApiPortal {
              |      [].slice.call(document.querySelectorAll('.apikey-edit')).map(b => {
              |        b.addEventListener('click', () => {
              |          const client_id = b.getAttribute('data-client-id');
-             |          const sub = b.getAttribute('data-sub');
-             |          const consumer = b.getAttribute('data-consumer');
-             |          let name = prompt("Apikey name ?");
-             |          fetch('${config.prefix.getOrElse("")}/api/apikeys/' + client_id, {
-             |            method: "PUT",
-             |            credentials: "include",
-             |            headers: {
-             |              "Content-Type": "application/json",
-             |            },
-             |            body: JSON.stringify({
-             |              sub, consumer, name
-             |            })
-             |          }).then(() => {
-             |            setTimeout(() => {
-             |              window.location.reload()
-             |            }, 200);
-           |            });
+             |          const name = b.getAttribute('data-name');
+             |          const description = b.getAttribute('data-description');
+             |          const bearer = b.getAttribute('data-bearer');
+             |          const enabled = b.getAttribute('data-enabled');
+             |          const plan = b.getAttribute('data-plan');
+             |          const apikey = { client_id, name, description, bearer, enabled, plan };
+             |          openApiKeyEditor({ mode: 'update', apikey });
+             |          // const sub = b.getAttribute('data-sub');
+             |          // const consumer = b.getAttribute('data-consumer');
+             |          // let name = prompt("Apikey name ?");
+             |          // fetch('${config.prefix.getOrElse("")}/api/apikeys/' + client_id, {
+             |          //   method: "PUT",
+             |          //   credentials: "include",
+             |          //   headers: {
+             |          //     "Content-Type": "application/json",
+             |          //   },
+             |          //   body: JSON.stringify({
+             |          //     sub, consumer, name
+             |          //   })
+             |          // }).then(() => {
+             |          //   setTimeout(() => {
+             |          //     window.location.reload()
+             |          //   }, 200);
+           |            // });
              |        });
              |      });
              |      [].slice.call(document.querySelectorAll('.apikey-create')).map(b => {
              |        b.addEventListener('click', () => {
              |          const consumer = b.getAttribute('data-consumer');
-             |          let name = prompt("Apikey name ?");
-             |          fetch('${config.prefix.getOrElse("")}/api/apikeys', {
-             |            method: "POST",
-             |            credentials: "include",
-             |            headers: {
-             |              "Content-Type": "application/json",
-             |            },
-             |            body: JSON.stringify({
-             |              consumer, name
-             |            })
-             |          }).then(() => {
-             |            setTimeout(() => {
-             |              window.location.reload()
-             |            }, 200);
-           |            });
+             |          openApiKeyEditor({ mode: 'create', consumer });
+             |          // let name = prompt("Apikey name ?");
+             |          // fetch('${config.prefix.getOrElse("")}/api/apikeys', {
+             |          //   method: "POST",
+             |          //   credentials: "include",
+             |          //   headers: {
+             |          //     "Content-Type": "application/json",
+             |          //   },
+             |          //   body: JSON.stringify({
+             |          //     consumer, name
+             |          //   })
+             |          // }).then(() => {
+             |          //   setTimeout(() => {
+             |          //     window.location.reload()
+             |          //   }, 200);
+           |            // });
              |        });
              |      });
              |      [].slice.call(document.querySelectorAll('.apikey-delete')).map(b => {
@@ -524,6 +534,7 @@ object OtoroshiApiPortal {
       }.execute().map { resp =>
         Results.Ok(Json.obj(
           "status" -> resp.status,
+          "statusText" -> resp.statusText,
           "headers" -> resp.headers.mapValues(_.last),
           "body_str" -> resp.body[String]
         ))
@@ -533,7 +544,12 @@ object OtoroshiApiPortal {
   def serveCreateApikey(api: Api, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(implicit  env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
     ctx.request.body.runFold(ByteString.empty)(_ ++ _).flatMap { body =>
       val bodyJson = Json.parse(body.utf8String)
-      val consumer_id = bodyJson.select("consumer").as[String]
+      val consumer_id = bodyJson.select("consumer").asOpt[String].orElse(
+        api.consumers
+          .filter(c => c.status == ApiConsumerStatus.Published)
+          .find(c => c.autoValidation && c.consumerKind == ApiConsumerKind.Apikey)
+          .map(_.id)
+      ).get
       val nameOpt = bodyJson.select("name").asOpt[String]
       val descriptionOpt = bodyJson.select("description").asOpt[String]
       val enabledOpt = bodyJson.select("enabled").asOpt[Boolean]
@@ -542,7 +558,9 @@ object OtoroshiApiPortal {
 
       (for {
         user <- ctx.user
-        consumer <- api.consumers.filter(c => c.status == ApiConsumerStatus.Published).find(_.id == consumer_id) if /*consumer.autoValidation && */consumer.consumerKind == ApiConsumerKind.Apikey // TODO: remove comment
+        consumer <- api.consumers
+          .filter(c => c.status == ApiConsumerStatus.Published)
+          .find(_.id == consumer_id) if consumer.autoValidation && consumer.consumerKind == ApiConsumerKind.Apikey
         doc <- api.documentation
         plan <- doc.plans.find(p => planOpt.contains(p.id)).orElse(doc.plans.headOption)
       } yield {
@@ -846,6 +864,327 @@ object OtoroshiApiPortal {
     }
   }
 
+  def apikeyModalComponent(): String = {
+    s"""
+       |<!-- API Key Editor Modal -->
+       |<div class="modal fade" id="apiKeyEditorModal" tabindex="-1" aria-hidden="true">
+       |  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+       |    <div class="modal-content">
+       |      <div class="modal-header">
+       |        <div class="w-100">
+       |          <div class="d-flex align-items-center gap-2">
+       |            <h5 class="modal-title" id="apiKeyEditorTitle">Create Apikey</h5>
+       |            <span class="badge bg-secondary d-none" id="apiKeyEditorModeBadge">update</span>
+       |          </div>
+       |        </div>
+       |        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+       |      </div>
+       |
+       |      <div class="modal-body">
+       |        <form id="apiKeyEditorForm" class="needs-validation" novalidate>
+       |          <!-- Shown only in update -->
+       |          <div id="apiKeyEditorClientIdRow" class="mb-3 d-none">
+       |            <label class="form-label">Client ID</label>
+       |            <input type="text" class="form-control" id="apiKeyEditorClientId" readonly>
+       |          </div>
+       |
+       |          <div class="mb-3">
+       |            <label class="form-label">Name <span class="text-danger">*</span></label>
+       |            <input type="text" class="form-control" id="apiKeyEditorName" required>
+       |            <div class="invalid-feedback">Name is required</div>
+       |          </div>
+       |
+       |          <div class="mb-3">
+       |            <label class="form-label">Description</label>
+       |            <textarea id="apiKeyEditorDesc" class="form-control" rows="3" spellcheck="false"></textarea>
+       |          </div>
+       |
+       |          <div class="form-check form-switch mb-3">
+       |            <input class="form-check-input" type="checkbox" id="apiKeyEditorEnabled">
+       |            <label class="form-check-label" for="apiKeyEditorEnabled">Enabled</label>
+       |          </div>
+       |
+       |          <!-- Create-only: plan select -->
+       |          <div id="apiKeyEditorPlanRow" class="mb-3">
+       |            <label class="form-label">Plan <span class="text-danger">*</span></label>
+       |            <select id="apiKeyEditorPlan" class="form-select" required>
+       |              <option value="">— choose a plan —</option>
+       |            </select>
+       |            <div class="form-text" id="apiKeyEditorPlanHelp"></div>
+       |            <div class="invalid-feedback">Plan is required</div>
+       |          </div>
+       |          <!-- Update-only: plan display -->
+       |          <div id="apiKeyEditorPlanDisplay" class="mb-3">
+       |            <label class="form-label">Plan</label>
+       |            <input type="text" class="form-control" id="apiKeyEditorDisplay" readonly>
+       |            <div class="form-text" id="apiKeyEditorPlanHelp2"></div>
+       |          </div>
+       |
+       |          <!-- Update-only: bearer with show/hide + copy -->
+       |          <div id="apiKeyEditorBearerRow" class="mb-1 d-none">
+       |            <label class="form-label">Bearer</label>
+       |            <div class="input-group">
+       |              <input type="password" class="form-control font-monospace" id="apiKeyEditorBearer" readonly>
+       |              <button class="btn btn-outline-secondary" type="button" id="apiKeyEditorToggleBearer" aria-label="Display/Hide">👁️</button>
+       |              <button class="btn btn-outline-secondary" type="button" id="apiKeyEditorCopyBearer" aria-label="Copy">📋</button>
+       |            </div>
+       |          </div>
+       |        </form>
+       |      </div>
+       |
+       |      <div class="modal-footer">
+       |        <div class="me-auto small" id="apiKeyEditorMsg"></div>
+       |        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+       |        <button type="button" class="btn btn-primary" id="apiKeyEditorSubmitBtn">Save</button>
+       |      </div>
+       |    </div>
+       |  </div>
+       |</div>
+       |
+       |<script>
+       |(() => {
+       |  const modalEl   = document.getElementById('apiKeyEditorModal');
+       |  let modalInst   = null;
+       |
+       |  // Elements
+       |  const titleEl   = document.getElementById('apiKeyEditorTitle');
+       |  const modeBadge = document.getElementById('apiKeyEditorModeBadge');
+       |  const msgEl     = document.getElementById('apiKeyEditorMsg');
+       |
+       |  const formEl    = document.getElementById('apiKeyEditorForm');
+       |  const nameEl    = document.getElementById('apiKeyEditorName');
+       |  const descEl    = document.getElementById('apiKeyEditorDesc');
+       |  const enabledEl = document.getElementById('apiKeyEditorEnabled');
+       |  const planRow   = document.getElementById('apiKeyEditorPlanRow');
+       |  const planDisplay   = document.getElementById('apiKeyEditorPlanDisplay');
+       |  const planInput   = document.getElementById('apiKeyEditorDisplay');
+       |  const planSel   = document.getElementById('apiKeyEditorPlan');
+       |  const planHelp  = document.getElementById('apiKeyEditorPlanHelp');
+       |  const planHelp2  = document.getElementById('apiKeyEditorPlanHelp2');
+       |
+       |  const cidRow    = document.getElementById('apiKeyEditorClientIdRow');
+       |  const cidEl     = document.getElementById('apiKeyEditorClientId');
+       |
+       |  const bearerRow = document.getElementById('apiKeyEditorBearerRow');
+       |  const bearerEl  = document.getElementById('apiKeyEditorBearer');
+       |  const btnShow   = document.getElementById('apiKeyEditorToggleBearer');
+       |  const btnCopy   = document.getElementById('apiKeyEditorCopyBearer');
+       |  const btnSave   = document.getElementById('apiKeyEditorSubmitBtn');
+       |
+       |  // Utilities
+       |  const setBusy = (busy) => {
+       |    [nameEl, descEl, enabledEl, planSel, btnShow, btnCopy, btnSave].forEach(el => {
+       |      if (el) el.disabled = !!busy;
+       |    });
+       |  };
+       |
+       |  const showMsg = (text, kind = 'muted') => {
+       |    msgEl.className = `me-auto small text-$${kind}`;
+       |    msgEl.textContent = text || '';
+       |  };
+       |
+       |  const resetMsg = () => showMsg('');
+       |
+       |  const updateSecretBanner = () => {
+       |    const danger = false && bearerEl.type === 'text';
+       |    // warnEl.classList.toggle('d-none', !danger);
+       |  };
+       |
+       |  btnShow.addEventListener('click', () => {
+       |    bearerEl.type = bearerEl.type === 'password' ? 'text' : 'password';
+       |    updateSecretBanner();
+       |  });
+       |
+       |  const copyToClipboard = async (text) => {
+       |    try {
+       |      if (navigator.clipboard?.writeText) {
+       |        await navigator.clipboard.writeText(text);
+       |        return true;
+       |      }
+       |      const ta = document.createElement('textarea');
+       |      ta.value = text;
+       |      document.body.appendChild(ta);
+       |      ta.select();
+       |      document.execCommand('copy');
+       |      document.body.removeChild(ta);
+       |      return true;
+       |    } catch { return false; }
+       |  };
+       |
+       |  btnCopy.addEventListener('click', async () => {
+       |    const ok = await copyToClipboard(bearerEl.value || '');
+       |    showMsg(ok ? 'Bearer copied' : 'Impossible to copy.', ok ? 'success' : 'danger');
+       |    setTimeout(resetMsg, 2000);
+       |  });
+       |
+       |  // Load plans (create mode)
+       |  const loadPlans = async () => {
+       |    const mode = modeBadge.textContent || 'create';
+       |    planSel.innerHTML = '<option value="">— choose a plan —</option>';
+       |    planHelp.textContent = '';
+       |    try {
+       |      const res = await fetch('/api/plans', { method: 'GET', credentials: "include" });
+       |      if (!res.ok) throw new Error('GET /api/plans non OK');
+       |      const plans = await res.json(); // [{id, name, description}]
+       |      if (mode === 'create') {
+       |        if (Array.isArray(plans)) {
+       |          plans.forEach(p => {
+       |            const opt = document.createElement('option');
+       |            opt.value = p.id;
+       |            opt.textContent = p.name || p.id;
+       |            opt.dataset.description = p.description || '';
+       |            planSel.appendChild(opt);
+       |          });
+       |          // help text on change
+       |          planSel.addEventListener('change', () => {
+       |            const opt = planSel.options[planSel.selectedIndex];
+       |            planHelp.textContent = opt?.dataset?.description || '';
+       |          }, { once: true });
+       |        }
+       |      } else {
+       |        const plan = plans.find(p => p.id == planInput.value);
+       |        planInput.value = plan.name;
+       |        planHelp2.textContent = plan.description;
+       |      }
+       |    } catch (e) {
+       |      showMsg('Unable to load plans', 'warning');
+       |      console.warn(e);
+       |    }
+       |  };
+       |
+       |  // Submit (create/update)
+       |  btnSave.addEventListener('click', async () => {
+       |    resetMsg();
+       |    formEl.classList.add('was-validated');
+       |    // if (!formEl.checkValidity()) {
+       |    //   showMsg('Please check the form', 'danger');
+       |    //   return;
+       |    // }
+       |
+       |    const mode = modeBadge.textContent || 'create';
+       |    setBusy(true);
+       |
+       |    try {
+       |      if (mode === 'create') {
+       |        const payload = {
+       |          name: nameEl.value.trim(),
+       |          description: descEl.value.trim(),
+       |          enabled: !!enabledEl.checked,
+       |          plan: planSel.value
+       |        };
+       |        const res = await fetch('/api/apikeys', {
+       |          method: 'POST',
+       |          headers: { 'content-type': 'application/json' },
+       |          body: JSON.stringify(payload),
+       |          credentials: "include",
+       |        });
+       |        if (!res.ok) {
+       |          const txt = await res.text().catch(() => '');
+       |          throw new Error(`Create failed (HTTP $${res.status}) $${txt}`);
+       |        }
+       |        const created = await res.json().catch(() => null);
+       |        showMsg('Apikey successfully created', 'success');
+       |        // Event pour que l’app rafraîchisse les listes
+       |        window.dispatchEvent(new CustomEvent('apikey:created', { detail: created || payload }));
+       |        // fermer après un petit délai
+       |        setTimeout(() => {
+       |          bootstrap.Modal.getInstance(modalEl)?.hide();
+       |          window.location.reload();
+     |          }, 700);
+       |      } else {
+       |        const clientId = cidEl.value;
+       |        const payload = {
+       |          name: nameEl.value.trim(),
+       |          description: descEl.value.trim(),
+       |          enabled: !!enabledEl.checked
+       |        };
+       |        const res = await fetch(`/api/apikeys/$${encodeURIComponent(clientId)}`, {
+       |          method: 'PUT',
+       |          headers: { 'content-type': 'application/json' },
+       |          body: JSON.stringify(payload)
+       |        });
+       |        if (!res.ok) {
+       |          const txt = await res.text().catch(() => '');
+       |          throw new Error(`Update failed (HTTP $${res.status}) $${txt}`);
+       |        }
+       |        const updated = await res.json().catch(() => null);
+       |        showMsg('Apikey updated', 'success');
+       |        window.dispatchEvent(new CustomEvent('apikey:updated', { detail: updated || { client_id: clientId, ...payload } }));
+       |        setTimeout(() => {
+       |          bootstrap.Modal.getInstance(modalEl)?.hide();
+       |          window.location.reload();
+     |          }, 700);
+       |      }
+       |    } catch (e) {
+       |      showMsg(e.message || 'Unexpected error', 'danger');
+       |    } finally {
+       |      setBusy(false);
+       |    }
+       |  });
+       |
+       |  // Public API
+       |  // openApiKeyEditor({ mode: 'create' | 'update', apikey?: {client_id,name,description,bearer,enabled} })
+       |  window.openApiKeyEditor = async ({ mode = 'create', apikey = null } = {}) => {
+       |    if (!modalInst) {
+       |      modalInst = new bootstrap.Modal(modalEl, { backdrop: 'static' });
+       |    }
+       |
+       |    // Reset form state
+       |    formEl.reset();
+       |    formEl.classList.remove('was-validated');
+       |    resetMsg();
+       |    // warnEl.classList.add('d-none');
+       |
+       |    // Configure by mode
+       |    if (mode === 'update') {
+       |      btnSave.textContent = 'Save';
+       |      titleEl.textContent = 'Update apikey';
+       |      modeBadge.textContent = 'update';
+       |      modeBadge.classList.remove('d-none');
+       |
+       |      cidRow.classList.remove('d-none');
+       |      bearerRow.classList.remove('d-none');
+       |      planRow.classList.add('d-none');
+       |      planDisplay.classList.remove('d-none');
+       |
+       |      // Fill fields from provided apikey
+       |      const k = apikey || {};
+       |      cidEl.value     = k.client_id || '';
+       |      nameEl.value    = k.name || '';
+       |      descEl.value    = k.description || '';
+       |      enabledEl.checked = !!k.enabled;
+       |      planInput.value = k.plan || '';
+       |      bearerEl.value  = k.bearer || '';
+       |      bearerEl.type   = 'password';
+       |      updateSecretBanner();
+       |      await loadPlans();
+       |    } else {
+       |      btnSave.textContent = 'Create';
+       |      titleEl.textContent = 'Create apikey';
+       |      modeBadge.textContent = 'create';
+       |      modeBadge.classList.add('d-none');
+       |
+       |      cidRow.classList.add('d-none');
+       |      bearerRow.classList.add('d-none');
+       |      planRow.classList.remove('d-none');
+       |      planDisplay.classList.add('d-none');
+       |
+       |
+       |      // Defaults
+       |      enabledEl.checked = true;
+       |
+       |      // Load plans
+       |      await loadPlans();
+       |    }
+       |
+       |    modalInst.show();
+       |  };
+       |})();
+       |</script>
+       |
+       |""".stripMargin
+  }
+
   def testerComponent(): String = {
     s"""
        |<!-- API Tester Modal (Bootstrap 5) -->
@@ -986,7 +1325,7 @@ object OtoroshiApiPortal {
        |  const loadApiKeys = async () => {
        |    selApiKey.innerHTML = '<option value="">— none —</option>';
        |    try {
-       |      const res = await fetch('/api/apikeys', { method: 'GET' });
+       |      const res = await fetch('/api/apikeys', { method: 'GET', credentials: 'include' });
        |      if (!res.ok) throw new Error('GET /api/apikeys non OK');
        |      const data = await res.json(); // expecting [{client_id, name, bearer}]
        |      if (Array.isArray(data)) {
@@ -999,7 +1338,7 @@ object OtoroshiApiPortal {
        |        });
        |      }
        |    } catch (e) {
-       |      console.warn('Impossible de charger /api/apikeys', e);
+       |      console.warn('Unable to load /api/apikeys', e);
        |    }
        |  };
        |
@@ -1048,13 +1387,13 @@ object OtoroshiApiPortal {
        |    try {
        |      headersObj = tryParseJSON(taHeaders.value) || {};
        |    } catch (e) {
-       |      errEl.textContent = 'Headers JSON invalide.';
+       |      errEl.textContent = 'Invalid JSON header';
        |      return;
        |    }
        |    try {
        |      bodyObj = tryParseJSON(taBody.value); // may be null
        |    } catch (e) {
-       |      errEl.textContent = 'Body JSON invalide.';
+       |      errEl.textContent = 'Invalid JSON Body';
        |      return;
        |    }
        |
@@ -1070,37 +1409,33 @@ object OtoroshiApiPortal {
        |    try {
        |      res = await fetch('/api/_test', {
        |        method: 'POST',
+       |        credentials: 'include',
        |        headers: { 'content-type': 'application/json' },
        |        body: JSON.stringify(payload)
        |      });
        |      const t1 = performance.now();
        |      durEl.textContent = `$${Math.round(t1 - t0)} ms`;
-       |      statusEl.textContent = `$${res.status} $${res.statusText || ''}`.trim();
-       |
+       |      data = await res.json();
+       |      statusEl.textContent = `$${data.status} $${data.statusText || ''}`.trim();
        |      // response parsing (headers + body)
-       |      res.headers?.forEach((v, k) => resHeaders[k] = v);
+       |      resHeaders = data.headers;
        |      respHEl.textContent = pretty(resHeaders);
-       |
-       |      const ct = res.headers.get('content-type') || '';
-       |      if (ct.includes('application/json')) {
-       |        data = await res.json();
-       |        respBEl.textContent = pretty(data);
-       |      } else if (ct.startsWith('text/')) {
-       |        data = await res.text();
-       |        respBEl.textContent = data;
+
+       |      const ct = data.headers['content-type'] || data.headers['Content-Type'] || '';
+       |      if (ct.includes('application/json') || ct.includes('json')) {
+       |        respBEl.textContent = pretty(JSON.parse(data.body_str));
        |      } else {
-       |        const blob = await res.blob();
-       |        respBEl.textContent = `[$${blob.type || 'binary'}] $${blob.size} bytes`;
+       |        respBEl.textContent = data.body_str;
        |      }
        |
        |      if (!res.ok) {
-       |        errEl.textContent = `Requête échouée (HTTP $${res.status}).`;
+       |        errEl.textContent = `Request failed (HTTP $${res.status}).`;
        |      }
        |    } catch (e) {
        |      const t1 = performance.now();
        |      durEl.textContent = `$${Math.round(t1 - t0)} ms`;
        |      statusEl.textContent = '—';
-       |      errEl.textContent = `Erreur: $${e.message}`;
+       |      errEl.textContent = `Error: $${e.message}`;
        |    }
        |  });
        |
@@ -1324,6 +1659,7 @@ object OtoroshiApiPortal {
        |    </nav>
        |    ${content}
        |    </main>
+       |    ${apikeyModalComponent()}
        |    ${testerComponent()}
        |    <!-- JS -->
        |    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js" integrity="sha384-FKyoEForCGlyvwx9Hj09JcYn3nv7wiPVlz7YYwJrWVcXK/BmnVDxM+D2scQbITxI" crossorigin="anonymous"></script>
