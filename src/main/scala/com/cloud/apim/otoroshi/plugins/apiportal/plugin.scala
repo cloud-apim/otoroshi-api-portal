@@ -308,10 +308,12 @@ object OtoroshiApiPortal {
                    |            const verb = node.childNodes[1].childNodes[0].childNodes[0].getAttribute('type').toUpperCase();
                    |            const url = node.childNodes[1].childNodes[1].childNodes[0].childNodes[1].childNodes[0].textContent;
                    |            let body = null;
+                   |            let presetHeaders = { 'Accept': 'application/json' };
                    |            if (node.childNodes.length === 4) {
                    |              body = node.childNodes[2].querySelector('code').textContent;
+                   |              presetHeaders['Content-Type'] = 'application/json'
                    |            }
-                   |            openApiTester({ verb, url, presetBody: body, presetHeaders: {"Content-Type": "application/json"} });
+                   |            openApiTester({ verb, url, presetBody: body, presetHeaders });
                    |          });
                    |          node.prepend(button);
                    |        });
