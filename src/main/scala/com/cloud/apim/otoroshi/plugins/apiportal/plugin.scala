@@ -290,34 +290,38 @@ object OtoroshiApiPortal {
                    |       sanitize="true"
                    |       showObjectSchemaExamples="true"></redoc>
                    |  </div>
-                   |  <!--script>
+                   |  <script>
                    |    var interval = null;
                    |    interval = setInterval(function() {
                    |      console.log('interval');
                    |      var menu = document.querySelector('redoc .menu-content');
-                   |      var error = document.querySelector('redoc h1');
                    |      if (menu) {
-                   |        var node = document.createElement('select');
-                   |        node.className = "form-control";
-                   |        node.style.marginBottom = "10px";
-                   |        node.innerHTML = '<option value="1.0.0">version 1.0.0</option><option value="2.0.0">version 2.0.0</option><option value="3.0.0">version 3.0.0</option>';
-                   |        node.addEventListener('change', function (event) {
-                   |          console.log('changed', node.value);
-                   |          document.querySelector('redoc').setAttribute("spec-url", node.value + "-oas.json");
-                   |        })
-                   |        menu.prepend(node);
+                   |        console.log('infecting redoc ...');
+                   |        [].slice.call(document.querySelectorAll('.sc-iGgWBj.sc-gsFSXq.lbpUdJ.bOFhJE')).map(node => {
+                   |          const button = document.createElement('button');
+                   |          button.type = "button";
+                   |          button.className = "btn btn-success";
+                   |          button.textContent = "Test endpoint";
+                   |          button.setAttribute('style', "--bs-btn-padding-y: 0.08rem;--bs-btn-padding-x: 0.2rem;--bs-btn-font-size: 0.7rem;margin-bottom: 5px;");
+                   |          button.addEventListener('click', function() {
+                   |            console.log('test', node);
+                   |            const verb = node.childNodes[1].childNodes[0].childNodes[0].getAttribute('type').toUpperCase();
+                   |            const url = node.childNodes[1].childNodes[1].childNodes[0].childNodes[1].childNodes[0].textContent;
+                   |            let body = null;
+                   |            if (node.childNodes.length === 4) {
+                   |              body = node.childNodes[2].querySelector('code').textContent;
+                   |            }
+                   |            openApiTester({ verb, url, presetBody: body, presetHeaders: {"Content-Type": "application/json"} });
+                   |          });
+                   |          node.prepend(button);
+                   |        });
                    |        clearInterval(interval);
                    |      } else if (error && error.textContent.indexOf('Something went wrong...') > -1) {
                    |        console.log('found redoc error');
                    |        clearInterval(interval);
-                   |        var node = document.createElement('select');
-                   |        node.className = "form-control";
-                   |        node.style.marginBottom = "10px";
-                   |        node.innerHTML = '<option value="1.0.0">version 1.0.0</option><option value="2.0.0">version 2.0.0</option><option value="3.0.0">version 3.0.0</option>';
-                   |        document.querySelector('.redoc-container-div').prepend(node);
                    |      }
                    |    }, 200);
-                   |  </script-->
+                   |  </script>
                    |</div>""".stripMargin
               )).as("text/html").vfuture
             }
@@ -1321,8 +1325,7 @@ object OtoroshiApiPortal {
        |    ${testerComponent()}
        |    <!-- JS -->
        |    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js" integrity="sha384-FKyoEForCGlyvwx9Hj09JcYn3nv7wiPVlz7YYwJrWVcXK/BmnVDxM+D2scQbITxI" crossorigin="anonymous"></script>
-       |    <script src="https://cdn.redoc.ly/redoc/latest/bundles/redoc.standalone.js"></script>
-       |    <script src="https://cdn.jsdelivr.net/npm/redoc-try@1.4.10/dist/try.js"></script>
+       |    <script src="https://cdn.redoc.ly/redoc/v2.5.1/bundles/redoc.standalone.js"></script>
        |    <script type="text/javascript" src="${prefix}/portal.js"></script>
        |    <script>
        |      // Theme toggle with persistence
