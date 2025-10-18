@@ -1318,7 +1318,7 @@ object OtoroshiApiPortal {
        |          ${if (ctx.user.isDefined && api.consumers.exists(_.consumerKind != ApiConsumerKind.Keyless)) {
                     s"""<li class="nav-item"><a class="nav-link ${navPathActive(Seq("/subscriptions"), ctx, prefix)}" href="${prefix}/subscriptions">Subscriptions</a></li>"""
                   } else ""}
-       |          <li class="nav-item"><a class="nav-link ${navPathActive(Seq("/tester"), ctx, prefix)}" href="${prefix}/tester">Tester</a></li>
+       |          <!--li class="nav-item"><a class="nav-link ${navPathActive(Seq("/tester"), ctx, prefix)}" href="${prefix}/tester">Tester</a></li-->
        |        </ul>
        |      </div>
        |    </nav>
