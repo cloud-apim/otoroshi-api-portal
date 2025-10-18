@@ -344,7 +344,14 @@ object OtoroshiApiPortal {
     Results.Ok("console.log('portal loaded !')").as("text/javascript").vfuture
   }
   def serveTesterPage(api: Api, doc: ApiDocumentation, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(implicit  env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
-    Results.Ok(baseTemplate(s"${api.name} - Subscriptions", config.prefix.getOrElse(""), api, doc, ctx)("")).as("text/html").vfuture
+    Results.Ok(baseTemplate(s"${api.name} - Subscriptions", config.prefix.getOrElse(""), api, doc, ctx)(
+      s"""
+         |<button class="btn btn-primary"
+         |  onclick="openApiTester({ url: 'https://wines-api-sandbox-01j0vgh9zmnnzdmzn8jxbc40pe.cloud-apim.dev/api/regions', method: 'GET' })">
+         |  Tester l’API
+         |</button>
+         |
+         |""".stripMargin)).as("text/html").vfuture
   }
   def serveDocumentationJson(api: Api, doc: ApiDocumentation, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(implicit  env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
     Results.Ok(doc.json.asObject ++ Json.obj(
@@ -833,6 +840,299 @@ object OtoroshiApiPortal {
     }
   }
 
+  def testerComponent(): String = {
+    s"""
+       |<!-- API Tester Modal (Bootstrap 5) -->
+       |<div class="modal fade" id="apiTesterModal" tabindex="-1" aria-hidden="true">
+       |  <div class="modal-dialog modal-xl modal-dialog-scrollable">
+       |    <div class="modal-content" style="height: 85vh;">
+       |      <div class="modal-header">
+       |        <div class="w-100">
+       |          <div class="d-flex gap-2 align-items-center mb-2">
+       |            <span class="badge bg-secondary" id="apiTesterMethod">GET</span>
+       |            <input type="text" class="form-control form-control-sm" id="apiTesterUrl" readonly>
+       |          </div>
+       |          <div id="apiTesterSecretWarn" class="text-warning small d-none">
+       |            ⚠️ oulà, il y a un secret là (vérifie que tu ne leaks rien d’important)
+       |          </div>
+       |        </div>
+       |        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+       |      </div>
+       |
+       |      <div class="modal-body p-0">
+       |        <div class="h-100 d-flex" style="min-height: 0;">
+       |          <!-- REQUEST -->
+       |          <div class="col-6 border-end p-3 d-flex flex-column" style="min-width: 0;">
+       |            <div class="d-flex align-items-center gap-2 mb-2">
+       |              <label class="form-label m-0">API key</label>
+       |              <select id="apiTesterApiKeySelect" class="form-select form-select-sm w-auto">
+       |                <option value="">— aucune —</option>
+       |              </select>
+       |              <button class="btn btn-outline-secondary btn-sm ms-auto" id="apiTesterResetHeaders">Reset headers</button>
+       |            </div>
+       |
+       |            <label class="form-label">Request headers (JSON)</label>
+       |            <textarea id="apiTesterHeaders" class="form-control font-monospace" style="height: 25vh;" spellcheck="false" placeholder='{"accept":"application/json"}'></textarea>
+       |
+       |            <div class="d-flex align-items-center gap-2 mt-3 mb-2">
+       |              <label class="form-label m-0">Request body (JSON, optional)</label>
+       |              <span class="text-muted small">(ignored if empty)</span>
+       |            </div>
+       |            <textarea id="apiTesterBody" class="form-control font-monospace" style="height: 25vh;" spellcheck="false" placeholder='{"name":"Alice"}'></textarea>
+       |          </div>
+       |
+       |          <!-- RESPONSE -->
+       |          <div class="col-6 p-3 d-flex flex-column" style="min-width: 0;">
+       |            <div class="d-flex align-items-center gap-3 mb-2">
+       |              <div>
+       |                <span class="text-muted small">Status:</span>
+       |                <span id="apiTesterStatus" class="fw-bold">—</span>
+       |              </div>
+       |              <div>
+       |                <span class="text-muted small">Duration:</span>
+       |                <span id="apiTesterDuration" class="fw-bold">—</span>
+       |              </div>
+       |              <div class="ms-auto">
+       |                <button class="btn btn-outline-secondary btn-sm" id="apiTesterClearResponse">Clear</button>
+       |              </div>
+       |            </div>
+       |
+       |            <label class="form-label">Response headers</label>
+       |            <pre id="apiTesterRespHeaders" class="bg-body-tertiary rounded p-2 mb-3" style="height: 18vh; overflow:auto; white-space:pre-wrap;"></pre>
+       |
+       |            <label class="form-label">Response body</label>
+       |            <pre id="apiTesterRespBody" class="bg-body-tertiary rounded p-2" style="height: 37vh; overflow:auto; white-space:pre-wrap;"></pre>
+       |          </div>
+       |        </div>
+       |      </div>
+       |
+       |      <div class="modal-footer">
+       |        <div class="me-auto text-danger small" id="apiTesterError"></div>
+       |        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+       |        <button type="button" class="btn btn-primary" id="apiTesterSendBtn">Send</button>
+       |      </div>
+       |    </div>
+       |  </div>
+       |</div>
+       |
+       |<script>
+       |(() => {
+       |  const modalEl = document.getElementById('apiTesterModal');
+       |  let modalInstance = null;
+       |
+       |  // UI refs
+       |  const methodBadge = document.getElementById('apiTesterMethod');
+       |  const urlInput    = document.getElementById('apiTesterUrl');
+       |
+       |  const secretWarn  = document.getElementById('apiTesterSecretWarn');
+       |
+       |  const selApiKey   = document.getElementById('apiTesterApiKeySelect');
+       |  const taHeaders   = document.getElementById('apiTesterHeaders');
+       |  const taBody      = document.getElementById('apiTesterBody');
+       |
+       |  const statusEl    = document.getElementById('apiTesterStatus');
+       |  const durEl       = document.getElementById('apiTesterDuration');
+       |  const respHEl     = document.getElementById('apiTesterRespHeaders');
+       |  const respBEl     = document.getElementById('apiTesterRespBody');
+       |
+       |  const errEl       = document.getElementById('apiTesterError');
+       |
+       |  const btnSend     = document.getElementById('apiTesterSendBtn');
+       |  const btnResetHdr = document.getElementById('apiTesterResetHeaders');
+       |  const btnClearRes = document.getElementById('apiTesterClearResponse');
+       |
+       |  // Defaults
+       |  const DEFAULT_HEADERS = { "accept": "application/json" };
+       |
+       |  // Helpers
+       |  const pretty = (obj) => {
+       |    try { return JSON.stringify(obj, null, 2); } catch { return String(obj); }
+       |  };
+       |
+       |  const tryParseJSON = (str) => {
+       |    if (!str || !str.trim()) return null;
+       |    try { return JSON.parse(str); } catch (e) { throw new Error("JSON invalide"); }
+       |  };
+       |
+       |  const headersToKV = (headers) => {
+       |    // headers can be a Headers instance or plain object
+       |    if (!headers) return {};
+       |    if (typeof Headers !== "undefined" && headers instanceof Headers) {
+       |      const out = {};
+       |      headers.forEach((v, k) => out[k] = v);
+       |      return out;
+       |    }
+       |    return headers;
+       |  };
+       |
+       |
+       |  const updateSecretBanner = () => {
+       |    const hdrs = taHeaders.value;
+       |    const body = taBody.value;
+       |    const danger = false;
+       |    secretWarn.classList.toggle('d-none', !danger);
+       |  };
+       |
+       |  taHeaders.addEventListener('input', updateSecretBanner);
+       |  taBody.addEventListener('input', updateSecretBanner);
+       |
+       |  // API keys loading
+       |  const loadApiKeys = async () => {
+       |    selApiKey.innerHTML = '<option value="">— none —</option>';
+       |    try {
+       |      const res = await fetch('/api/apikeys', { method: 'GET' });
+       |      if (!res.ok) throw new Error('GET /api/apikeys non OK');
+       |      const data = await res.json(); // expecting [{client_id, name, bearer}]
+       |      if (Array.isArray(data)) {
+       |        data.forEach((k, idx) => {
+       |          const opt = document.createElement('option');
+       |          opt.value = idx; // index-based
+       |          opt.textContent = k.name ? `$${k.name} ($${k.client_id || '—'})` : (k.client_id || 'clé');
+       |          opt.dataset.bearer = k.bearer || '';
+       |          selApiKey.appendChild(opt);
+       |        });
+       |      }
+       |    } catch (e) {
+       |      console.warn('Impossible de charger /api/apikeys', e);
+       |    }
+       |  };
+       |
+       |  // When selecting an API key, inject Authorization header
+       |  selApiKey.addEventListener('change', () => {
+       |    const idx = selApiKey.value;
+       |    if (!idx) return; // cleared
+       |    const opt = selApiKey.options[selApiKey.selectedIndex];
+       |    const bearer = opt?.dataset?.bearer || '';
+       |    let hdrObj;
+       |    try {
+       |      hdrObj = tryParseJSON(taHeaders.value) || {};
+       |    } catch (e) {
+       |      // if invalid JSON, reset to default then apply
+       |      hdrObj = { ...DEFAULT_HEADERS };
+       |    }
+       |    if (bearer) hdrObj['authorization'] = `Bearer $${bearer}`;
+       |    taHeaders.value = pretty(hdrObj);
+       |    updateSecretBanner();
+       |  });
+       |
+       |  btnResetHdr.addEventListener('click', () => {
+       |    taHeaders.value = pretty(DEFAULT_HEADERS);
+       |    updateSecretBanner();
+       |  });
+       |
+       |  btnClearRes.addEventListener('click', () => {
+       |    statusEl.textContent = '—';
+       |    durEl.textContent = '—';
+       |    respHEl.textContent = '';
+       |    respBEl.textContent = '';
+       |    errEl.textContent = '';
+       |  });
+       |
+       |  // SEND handler
+       |  btnSend.addEventListener('click', async () => {
+       |    errEl.textContent = '';
+       |    statusEl.textContent = '…';
+       |    durEl.textContent = '…';
+       |    respHEl.textContent = '';
+       |    respBEl.textContent = '';
+       |
+       |    // parse request pieces
+       |    let headersObj = null;
+       |    let bodyObj = null;
+       |    try {
+       |      headersObj = tryParseJSON(taHeaders.value) || {};
+       |    } catch (e) {
+       |      errEl.textContent = 'Headers JSON invalide.';
+       |      return;
+       |    }
+       |    try {
+       |      bodyObj = tryParseJSON(taBody.value); // may be null
+       |    } catch (e) {
+       |      errEl.textContent = 'Body JSON invalide.';
+       |      return;
+       |    }
+       |
+       |    const payload = {
+       |      method: methodBadge.textContent,
+       |      url: urlInput.value,
+       |      headers: headersObj,
+       |      body_json: bodyObj
+       |    };
+       |
+       |    const t0 = performance.now();
+       |    let res, data, resHeaders = {};
+       |    try {
+       |      res = await fetch('/api/_test', {
+       |        method: 'POST',
+       |        headers: { 'content-type': 'application/json' },
+       |        body: JSON.stringify(payload)
+       |      });
+       |      const t1 = performance.now();
+       |      durEl.textContent = `$${Math.round(t1 - t0)} ms`;
+       |      statusEl.textContent = `$${res.status} $${res.statusText || ''}`.trim();
+       |
+       |      // response parsing (headers + body)
+       |      res.headers?.forEach((v, k) => resHeaders[k] = v);
+       |      respHEl.textContent = pretty(resHeaders);
+       |
+       |      const ct = res.headers.get('content-type') || '';
+       |      if (ct.includes('application/json')) {
+       |        data = await res.json();
+       |        respBEl.textContent = pretty(data);
+       |      } else if (ct.startsWith('text/')) {
+       |        data = await res.text();
+       |        respBEl.textContent = data;
+       |      } else {
+       |        const blob = await res.blob();
+       |        respBEl.textContent = `[$${blob.type || 'binary'}] $${blob.size} bytes`;
+       |      }
+       |
+       |      if (!res.ok) {
+       |        errEl.textContent = `Requête échouée (HTTP $${res.status}).`;
+       |      }
+       |    } catch (e) {
+       |      const t1 = performance.now();
+       |      durEl.textContent = `$${Math.round(t1 - t0)} ms`;
+       |      statusEl.textContent = '—';
+       |      errEl.textContent = `Erreur: $${e.message}`;
+       |    }
+       |  });
+       |
+       |  // Public API
+       |  window.openApiTester = async ({ url, method = 'GET', presetHeaders = null, presetBody = null } = {}) => {
+       |    if (!modalInstance) {
+       |      modalInstance = new bootstrap.Modal(modalEl, { backdrop: 'static' });
+       |    }
+       |    methodBadge.textContent = (method || 'GET').toUpperCase();
+       |    urlInput.value = url || '';
+       |
+       |    if (presetHeaders && typeof presetHeaders === 'object') {
+       |      taHeaders.value = pretty(presetHeaders);
+       |    } else {
+       |      taHeaders.value = pretty(DEFAULT_HEADERS);
+       |    }
+       |    taBody.value = presetBody ? pretty(presetBody) : '';
+       |
+       |    // clear response zone
+       |    statusEl.textContent = '—';
+       |    durEl.textContent = '—';
+       |    respHEl.textContent = '';
+       |    respBEl.textContent = '';
+       |    errEl.textContent = '';
+       |
+       |    updateSecretBanner();
+       |
+       |    // load API keys (best-effort)
+       |    await loadApiKeys();
+       |
+       |    modalInstance.show();
+       |  };
+       |})();
+       |</script>
+       |
+       |""".stripMargin
+  }
+
   def baseTemplate(title: String, prefix: String, api: Api, doc: ApiDocumentation, ctx: NgbBackendCallContext)(content: String): String = {
     s"""
        |<!doctype html>
@@ -1018,9 +1318,11 @@ object OtoroshiApiPortal {
        |    </nav>
        |    ${content}
        |    </main>
+       |    ${testerComponent()}
        |    <!-- JS -->
        |    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js" integrity="sha384-FKyoEForCGlyvwx9Hj09JcYn3nv7wiPVlz7YYwJrWVcXK/BmnVDxM+D2scQbITxI" crossorigin="anonymous"></script>
        |    <script src="https://cdn.redoc.ly/redoc/latest/bundles/redoc.standalone.js"></script>
+       |    <script src="https://cdn.jsdelivr.net/npm/redoc-try@1.4.10/dist/try.js"></script>
        |    <script type="text/javascript" src="${prefix}/portal.js"></script>
        |    <script>
        |      // Theme toggle with persistence
@@ -1046,12 +1348,6 @@ object OtoroshiApiPortal {
        |      })();
        |    </script>
        |    <script type="module" src="https://cdn.jsdelivr.net/npm/zero-md@3?register"></script>
-       |    <script src="https://cdn.jsdelivr.net/npm/@barba/core"></script>
-       |    <script>
-       |      // barba.init({
-       |      //   // ...
-       |      // })
-       |    </script>
        |  </body>
        |</html>
        |""".stripMargin
