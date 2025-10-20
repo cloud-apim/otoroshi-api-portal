@@ -165,13 +165,13 @@ object OtoroshiApiPortal {
       .flatMapConcat(refOpt => Source(refOpt.toList))
       .filter(_.enabled)
       .filter(_.subscriptionKind == ApiConsumerKind.Apikey)
-      .filter(_.ownerRef == ctx.user.get.email)
-      .flatMapConcat(sub => Source(sub.tokenRefs.map(r => (sub, r)).toList))
+      .filter(c => ctx.user.map(_.email).contains(c.ownerRef))
+      .flatMapConcat(sub => if (sub.tokenRefs.isEmpty) Source.single((sub, "--")) else Source(sub.tokenRefs.map(r => (sub, r)).toList))
       .mapAsync(1) {
-        case (sub, token) if !sub.enabled && sub.tokenRefs.isEmpty => (sub, ApiKey(
+        case (sub, tok) if tok == "--" && sub.tokenRefs.isEmpty => (sub, ApiKey(
           clientId = IdGenerator.token(16),
-          clientSecret = "",
-          clientName = sub.metadata.get("otoroshi-api-client-name").getOrElse("--"),
+          clientSecret = "--",
+          clientName = sub.metadata.getOrElse("otoroshi-api-client-name", "--"),
           description = sub.description,
           authorizedEntities = Seq.empty,
           enabled = false,
@@ -180,7 +180,8 @@ object OtoroshiApiPortal {
           monthlyQuota = 100L,
           tags = Seq.empty,
           metadata = Map(
-            "waiting-approval" -> "true"
+            "waiting-approval" -> "true",
+            "otoroshi-api-plan-ref" -> sub.metadata.get("otoroshi-api-plan-ref").getOrElse("--"),
           ),
           location = sub.location,
         ).some).vfuture
@@ -420,6 +421,7 @@ object OtoroshiApiPortal {
     api.consumers.find(c => c.status == ApiConsumerStatus.Published) match {
       case None => Results.Ok(baseTemplate(s"${api.name} - Subscriptions", config.prefix.getOrElse(""), api, doc, ctx)("")).as("text/html").vfuture
       case Some(consumer) => apikeysFromApiForUser(consumer, ctx).flatMap { apikeys =>
+        apikeys.foreach(_._2.clientSecret.debugPrintln)
         val sidebar = ApiDocumentationSidebar(Json.obj(
           "items" -> Json.arr(Json.obj(
             "label" -> "My apikeys",
@@ -438,6 +440,7 @@ object OtoroshiApiPortal {
              |        <th scope="col">#</th>
              |        <th scope="col">Name</th>
              |        <th scope="col">Enabled</th>
+             |        <th scope="col">Status</th>
              |        <th scope="col">Actions</th>
              |      </tr>
              |    </thead>
@@ -448,13 +451,14 @@ object OtoroshiApiPortal {
                          |  <th scope="row">${tuple._2}</th>
                          |  <td>${tuple._1._2.clientName}</td>
                          |  <td>${if (tuple._1._2.enabled) "<span class=\"badge rounded-pill text-bg-success\">yes</span>" else "<span class=\"badge rounded-pill text-bg-danger\">no</span>"}</td>
+                         |  <td>${if (tuple._1._2.metadata.get("waiting-approval").contains("true")) "<span class=\"badge rounded-pill text-bg-warning\">waiting approval</span>" else "<span class=\"badge rounded-pill text-bg-success\">approved</span>"}</td>
                          |  <td>
                          |    <div class="btn-group">
                          |      <button class="btn btn-sm btn-outline-success apikey-edit" title="edit apikey"
                          |        data-client-id="${tuple._1._2.clientId}"
                          |        data-name="${tuple._1._2.clientName}"
                          |        data-description="${tuple._1._2.description}"
-                         |        data-bearer="${tuple._1._2.toBearer()}"
+                         |        data-bearer="${if (tuple._1._2.metadata.get("waiting-approval").contains("true")) "--" else tuple._1._2.toBearer()}"
                          |        data-enabled="${tuple._1._2.enabled}"
                          |        data-plan="${tuple._1._2.metadata.get("otoroshi-api-plan-ref").get}"
                          |        data-sub="${tuple._1._1.id}"
@@ -610,7 +614,7 @@ object OtoroshiApiPortal {
       val consumer_id = bodyJson.select("consumer").asOpt[String].orElse(
         api.consumers
           .filter(c => c.status == ApiConsumerStatus.Published)
-          .find(c => c.autoValidation && c.consumerKind == ApiConsumerKind.Apikey)
+          .find(c => c.consumerKind == ApiConsumerKind.Apikey)
           .map(_.id)
       ).get
       val nameOpt = bodyJson.select("name").asOpt[String]
@@ -623,7 +627,7 @@ object OtoroshiApiPortal {
         user <- ctx.user
         consumer <- api.consumers
           .filter(c => c.status == ApiConsumerStatus.Published)
-          .find(_.id == consumer_id) if consumer.autoValidation && consumer.consumerKind == ApiConsumerKind.Apikey
+          .find(_.id == consumer_id) if consumer.consumerKind == ApiConsumerKind.Apikey
         doc <- api.documentation
         plan <- doc.plans.find(p => planOpt.contains(p.id)).orElse(doc.plans.headOption)
       } yield {
@@ -634,7 +638,7 @@ object OtoroshiApiPortal {
           id = sub_id,
           name = s"subscription - ${clientName}",
           description = descriptionOpt.getOrElse(""),
-          enabled = consumer.autoValidation,
+          enabled = true,//consumer.autoValidation,
           dates = ApiConsumerSubscriptionDates(
             created_at = DateTime.now(),
             processed_at = DateTime.now(),
