@@ -152,4 +152,136 @@ object ApiDocumentationExample {
       )),
     )
   )
+  val wines = ApiDocumentation(
+    references = Seq(
+      ApiDocumentationResourceRef(Json.obj(
+        "title" -> "Wines API",
+        "link" -> "/openapi.json",
+      )),
+    ),
+    home = ApiDocumentationResource(Json.obj(
+      "path" -> "/home",
+      "content_type" -> "text/html",
+      "site_page" -> true,
+      "transform" -> "markdown",
+      "transform_wrapper" -> """<div class="container-xxl" style="margin-top: 30px;">{content}</div>""",
+      "text_content" ->
+        """<div class="container-xxl" style="margin-top: 30px;">
+          |
+          |# 🍷 Welcome to the Wine API
+          |
+          |Discover the world of wines through data!
+          |The **Wine API** gives you access to a rich catalog of wines, grape varieties, wineries, and wine regions from around the world. Whether you’re building an app for wine lovers, a recommendation engine, or an internal dashboard for your cellar — this API provides everything you need.
+          |
+          |---
+          |
+          |## 🌍 What You Can Do
+          |
+          |- **Browse wines** — Retrieve detailed information about wines, including tasting notes, vintage, grape composition, and producer details.
+          |- **Explore wine regions** — Discover wine-growing areas, appellations, and terroirs from every continent.
+          |- **Collect ratings and reviews** — Allow users to rate wines and leave comments to build community insights.
+          |- **Filter and search** — Find wines by region, grape variety, food pairing, or score.
+          |
+          |---
+          |
+          |## 🧭 Getting Started
+          |
+          |1. **Sign up** for an API key on this portal.
+          |2. **Check out the documentation** to learn about available endpoints.
+          |3. **Start querying** — for example, try:
+          |
+          |   ```bash
+          |   curl https://wines-api-sandbox-01j0vgh9zmnnzdmzn8jxbc40pe.cloud-apim.dev/api/wines?region=Bordeaux
+          |   ```
+          |
+          |to know more about it, go to the [documentation](/documentation)
+          |</div>
+          |""".stripMargin
+    )),
+    plans = Seq(ApiDocumentationPlan(Json.obj(
+      "id" -> "dev",
+      "name" -> "Dev",
+      "description" -> "An apikey to try the API on prototypes",
+      "throttling_quota" -> 100,
+      "daily_quota" -> 1000,
+      "monthly_quota" -> 1000,
+      "tags" -> Json.arr(),
+      "metadata" -> Json.obj(
+        "env" -> "dev"
+      ),
+    ))),
+    resources = Seq(
+      ApiDocumentationResource(Json.obj(
+        "title" -> "Wines API",
+        "path" -> "/openapi.json",
+        "content_type" -> "application/json",
+        "url" -> "https://wines-api-sandbox-01j0vgh9zmnnzdmzn8jxbc40pe.cloud-apim.dev/docs/openapi.json"
+      )),
+      ApiDocumentationResource(Json.obj(
+        "path" -> "/documentation/getting-started",
+        "content_type" -> "text/html",
+        "site_page" -> true,
+        "transform" -> "markdown",
+        "url" -> "https://github.com/mathieuancelinserli/wines-api-cloud-apim-serverless/raw/refs/heads/main/docs/index.md"
+      )),
+      ApiDocumentationResource(Json.obj(
+        "path" -> "/documentation/latency",
+        "content_type" -> "text/markdown",
+        "site_page" -> true,
+        "transform" -> "markdown",
+        "url" -> "https://github.com/mathieuancelinserli/wines-api-cloud-apim-serverless/raw/refs/heads/main/docs/latency.md"
+      )),
+      ApiDocumentationResource(Json.obj(
+        "path" -> "/docs/winesapp.png",
+        "content_type" -> "image/png",
+        "url" -> "https://github.com/mathieuancelinserli/wines-api-cloud-apim-serverless/raw/refs/heads/main/docs/winesapp.png"
+      )),
+      ApiDocumentationResource(Json.obj(
+        "path" -> "/docs/defer.png",
+        "content_type" -> "image/png",
+        "url" -> "https://github.com/mathieuancelinserli/wines-api-cloud-apim-serverless/raw/refs/heads/main/docs/defer.png"
+      )),
+    ),
+    logo = ApiDocumentationResource(Json.obj(
+      "url" -> "https://github.com/react-bootcamp/react-workshop/raw/master/step-2-done/public/img/chevrol-bel-air.png",
+      "path" -> "/favicon.png",
+      "content_type" -> "image/png",
+    )),
+    navigation = Seq(
+      ApiDocumentationSidebar(Json.obj(
+        "label" -> "Documentation",
+        "icon" -> Json.obj("css_icon_class" -> "bi bi-journal-text me-2"),
+        "path" -> "/documentation",
+        "items" -> Json.arr(
+          Json.obj(
+            "label" -> "Information",
+            "kind" -> "category",
+            "links" -> Json.arr(
+              Json.obj(
+                "label" -> "Getting started",
+                "link" -> "/documentation/getting-started",
+                "icon" -> Json.obj("css_icon_class" -> "bi bi-journal-text me-2")
+              ),
+              Json.obj(
+                "label" -> "Latency",
+                "link" -> "/documentation/latency",
+                "icon" -> Json.obj("css_icon_class" -> "bi bi-journal-text me-2")
+              )
+            )
+          ),
+          Json.obj(
+            "label" -> "API",
+            "kind" -> "category",
+            "links" -> Json.arr(
+              Json.obj(
+                "label" -> "API Reference",
+                "link" -> "/api-references",
+                "icon" -> Json.obj("css_icon_class" -> "bi bi-journal-text me-2")
+              )
+            )
+          )
+        )
+      )),
+    )
+  )
 }

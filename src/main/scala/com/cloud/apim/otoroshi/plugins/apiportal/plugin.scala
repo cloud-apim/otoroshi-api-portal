@@ -127,7 +127,7 @@ class OtoroshiApiPortal extends NgBackendCall {
       case None => BackendCallResponse(NgPluginHttpResponse.fromResult(Results.NotFound("API ref not found")), None).rightf
       case Some(ref) => env.datastores.apiDataStore.findById(ref) flatMap {
         case None => BackendCallResponse(NgPluginHttpResponse.fromResult(Results.NotFound("API not found")), None).rightf
-        case Some(api) => api.copy(documentation = ApiDocumentationExample.value.some).resolveDocumentation() flatMap { // TODO: remove example
+        case Some(api) => api.copy(documentation = ApiDocumentationExample.wines.some).resolveDocumentation() flatMap { // TODO: remove example
           case Some(doc) if doc.enabled => {
             val prefix = config.prefix.getOrElse("")
             val path = ctx.request.path.replaceFirst(prefix, "").toLowerCase()
@@ -168,6 +168,22 @@ object OtoroshiApiPortal {
       .filter(_.ownerRef == ctx.user.get.email)
       .flatMapConcat(sub => Source(sub.tokenRefs.map(r => (sub, r)).toList))
       .mapAsync(1) {
+        case (sub, token) if !sub.enabled && sub.tokenRefs.isEmpty => (sub, ApiKey(
+          clientId = IdGenerator.token(16),
+          clientSecret = "",
+          clientName = sub.metadata.get("otoroshi-api-client-name").getOrElse("--"),
+          description = sub.description,
+          authorizedEntities = Seq.empty,
+          enabled = false,
+          throttlingQuota = 100L,
+          dailyQuota = 100L,
+          monthlyQuota = 100L,
+          tags = Seq.empty,
+          metadata = Map(
+            "waiting-approval" -> "true"
+          ),
+          location = sub.location,
+        ).some).vfuture
         case (sub, token) => env.datastores.apiKeyDataStore.findById(token).map(key => (sub, key))
       }
       .flatMapConcat {
@@ -340,6 +356,40 @@ object OtoroshiApiPortal {
            |       hideHostname="false"
            |       showObjectSchemaExamples="true"
            |    ></redoc>
+           |  <script>
+           |    var interval = null;
+           |    interval = setInterval(function() {
+           |      console.log('interval');
+           |      var menu = document.querySelector('redoc .menu-content');
+           |      if (menu) {
+           |        console.log('infecting redoc ...');
+           |        [].slice.call(document.querySelectorAll('.sc-iGgWBj.sc-gsFSXq.lbpUdJ.bOFhJE')).map(node => {
+           |          const button = document.createElement('button');
+           |          button.type = "button";
+           |          button.className = "btn btn-success";
+           |          button.innerHTML = "Test endpoint <i class=\\"bi bi-play-circle\\"></i>";
+           |          button.setAttribute('style', "--bs-btn-padding-y: 0.08rem;--bs-btn-padding-x: 0.2rem;--bs-btn-font-size: 0.7rem;margin-bottom: 10px;");
+           |          button.addEventListener('click', function() {
+           |            console.log('test', node);
+           |            const verb = node.childNodes[1].childNodes[0].childNodes[0].getAttribute('type').toUpperCase();
+           |            const url = node.childNodes[1].childNodes[1].childNodes[0].childNodes[1].childNodes[0].textContent;
+           |            let body = null;
+           |            let presetHeaders = { 'Accept': 'application/json' };
+           |            if (node.childNodes.length === 4) {
+           |              body = node.childNodes[2].querySelector('code').textContent;
+           |              presetHeaders['Content-Type'] = 'application/json'
+           |            }
+           |            openApiTester({ verb, url, presetBody: body, presetHeaders });
+           |          });
+           |          node.prepend(button);
+           |        });
+           |        clearInterval(interval);
+           |      } else if (error && error.textContent.indexOf('Something went wrong...') > -1) {
+           |        console.log('found redoc error');
+           |        clearInterval(interval);
+           |      }
+           |    }, 200);
+           |  </script>
            |  </div>
            |</div>""".stripMargin
       )).as("text/html").vfuture
@@ -509,15 +559,28 @@ object OtoroshiApiPortal {
       case Some(consumer) => apikeysFromApiForUser(consumer, ctx).flatMap { apikeys =>
         Results.Ok(JsArray(apikeys.map {
           case (sub, key) =>
-            Json.obj(
-              "client_id" -> key.clientId,
-              "name" -> key.clientName,
-              "description" -> key.description,
-              "bearer" -> key.toBearer(),
-              "enabled" -> key.enabled,
-              "sub" -> sub.id,
-              "consumer" -> consumer.id,
-            )
+            key.metadata.get("waiting-approval") match {
+              case Some("true") => Json.obj(
+                "client_id" -> key.clientId,
+                "name" -> key.clientName,
+                "description" -> key.description,
+                "bearer" -> "--",
+                "enabled" -> false,
+                "sub" -> sub.id,
+                "consumer" -> consumer.id,
+                "status" -> "waiting-approval",
+              )
+              case _ => Json.obj(
+                "client_id" -> key.clientId,
+                "name" -> key.clientName,
+                "description" -> key.description,
+                "bearer" -> key.toBearer(),
+                "enabled" -> key.enabled,
+                "sub" -> sub.id,
+                "consumer" -> consumer.id,
+                "status" -> "validated",
+              )
+            }
         })).as("application/json").vfuture
       }
     }
@@ -570,8 +633,8 @@ object OtoroshiApiPortal {
           location = api.location,
           id = sub_id,
           name = s"subscription - ${clientName}",
-          description = "",
-          enabled = true,
+          description = descriptionOpt.getOrElse(""),
+          enabled = consumer.autoValidation,
           dates = ApiConsumerSubscriptionDates(
             created_at = DateTime.now(),
             processed_at = DateTime.now(),
@@ -584,12 +647,13 @@ object OtoroshiApiPortal {
           consumerRef = consumer.id,
           apiRef = api.id,
           subscriptionKind = consumer.consumerKind,
-          tokenRefs = Seq(clientId), // ref to apikey, cert, etc
+          tokenRefs = if (consumer.autoValidation) Seq(clientId) else Seq.empty,
           tags = Seq.empty,
           metadata = Map(
             "created_by" -> "otoroshi-api-portal-plugin",
             "otoroshi-api-plan-ref" -> plan.id,
             "otoroshi-api-plan-name" -> plan.name,
+            "otoroshi-api-client-name" -> clientName,
             "created_at" -> DateTime.now().toString(),
             "updated_at" -> DateTime.now().toString(),
           )
@@ -618,7 +682,9 @@ object OtoroshiApiPortal {
           location = api.location,
         )
         if (env.clusterConfig.mode.isWorker) {
-          ClusterAgent.clusterSaveApikey(env, newApikey)(ec, env.otoroshiMaterializer)
+          if (consumer.autoValidation) {
+            ClusterAgent.clusterSaveApikey(env, newApikey)(ec, env.otoroshiMaterializer)
+          }
           // TODO: implement it
           // ClusterAgent.clusterSaveSub(env, sub)(ec, env.otoroshiMaterializer)
           // ClusterAgent.clusterSaveApi(env, sub)(ec, env.otoroshiMaterializer)
@@ -633,16 +699,30 @@ object OtoroshiApiPortal {
           }
         })).flatMap { _ =>
           env.datastores.apiConsumerSubscriptionDataStore.set(sub).flatMap { _ =>
-            env.datastores.apiKeyDataStore.set(newApikey).map { _ =>
+            if (consumer.autoValidation) {
+              env.datastores.apiKeyDataStore.set(newApikey).map { _ =>
+                Results.Ok(Json.obj(
+                  "client_id" -> newApikey.clientId,
+                  "name" -> newApikey.clientName,
+                  "description" -> newApikey.description,
+                  "bearer" -> newApikey.toBearer(),
+                  "enabled" -> newApikey.enabled,
+                  "sub" -> sub.id,
+                  "consumer" -> consumer.id,
+                  "status" -> "validated",
+                )).as("application/json")
+              }
+            } else {
               Results.Ok(Json.obj(
                 "client_id" -> newApikey.clientId,
                 "name" -> newApikey.clientName,
                 "description" -> newApikey.description,
-                "bearer" -> newApikey.toBearer(),
-                "enabled" -> newApikey.enabled,
+                "bearer" -> "--",
+                "enabled" -> false,
                 "sub" -> sub.id,
                 "consumer" -> consumer.id,
-              )).as("application/json")
+                "status" -> "waiting-approval",
+              )).as("application/json").vfuture
             }
           }
         }
@@ -730,17 +810,31 @@ object OtoroshiApiPortal {
                           // TODO
                           // ClusterAgent.clusterSaveSub(env, sub)(ec, env.otoroshiMaterializer)
                         }
-                        env.datastores.apiConsumerSubscriptionDataStore.set(sub.copy(name = s"subscription - ${newApikey.clientName}")).flatMap { _ =>
-                          env.datastores.apiKeyDataStore.set(newApikey).map { _ =>
+                        env.datastores.apiConsumerSubscriptionDataStore.set(sub.copy(name = s"subscription - ${newApikey.clientName}", description = newApikey.description)).flatMap { _ =>
+                          if (consumer.autoValidation && sub.enabled) {
+                            env.datastores.apiKeyDataStore.set(newApikey).map { _ =>
+                              Results.Ok(Json.obj(
+                                "client_id" -> newApikey.clientId,
+                                "name" -> newApikey.clientName,
+                                "description" -> newApikey.description,
+                                "bearer" -> newApikey.toBearer(),
+                                "enabled" -> newApikey.enabled,
+                                "sub" -> sub.id,
+                                "consumer" -> consumer.id,
+                                "status" -> "validated"
+                              )).as("application/json")
+                            }
+                          } else {
                             Results.Ok(Json.obj(
                               "client_id" -> newApikey.clientId,
                               "name" -> newApikey.clientName,
                               "description" -> newApikey.description,
-                              "bearer" -> newApikey.toBearer(),
-                              "enabled" -> newApikey.enabled,
+                              "bearer" -> "--",
+                              "enabled" -> false,
                               "sub" -> sub.id,
                               "consumer" -> consumer.id,
-                            )).as("application/json")
+                              "status" -> "waiting-approval",
+                            )).as("application/json").vfuture
                           }
                         }
                       }
@@ -771,13 +865,21 @@ object OtoroshiApiPortal {
     def handleTransform(byteString: ByteString): ByteString = {
       // TODO: handle EL
       if (resource.transform.contains("markdown")) {
-        ByteString(s"""<zero-md><script type="text/markdown">${byteString.utf8String}</script></zero-md>""".stripMargin)
+        val content = s"""<zero-md><script type="text/markdown">${byteString.utf8String}</script></zero-md>""".stripMargin
+        resource.transform_wrapper match {
+          case None => ByteString(content)
+          case Some(wrapper) => ByteString(wrapper.replace("{content}", content))
+        }
       } else if (resource.transform.contains("redoc")) {
-        ByteString(s"""<redoc
+        val content = s"""<redoc
                       |   spec-url="${resource.path.headOption.getOrElse("#")}"
                       |   hideHostname="false"
                       |   showObjectSchemaExamples="true"
-                      |></redoc>""".stripMargin)
+                      |></redoc>""".stripMargin
+        resource.transform_wrapper match {
+          case None => ByteString(content)
+          case Some(wrapper) => ByteString(wrapper.replace("{content}", content))
+        }
       } else {
         byteString
       }
