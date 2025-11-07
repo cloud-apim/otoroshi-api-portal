@@ -10,7 +10,7 @@ lazy val root = (project in file("."))
     name := "otoroshi-api-portal",
     resolvers += "jitpack" at "https://jitpack.io",
     libraryDependencies ++= Seq(
-      "fr.maif" %% "otoroshi" % "17.7.0" % "provided",
+      "fr.maif" %% "otoroshi" % "17.8.0" % "provided",
       munit % Test
     )
   )
