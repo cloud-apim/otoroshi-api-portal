@@ -129,6 +129,7 @@ class OtoroshiApiPortal extends NgBackendCall {
         case None => BackendCallResponse(NgPluginHttpResponse.fromResult(Results.NotFound("API not found")), None).rightf
         case Some(api) => api
           .applyOnIf(api.metadata.get("doc_template").contains("wines"))(_.copy(documentation = ApiDocumentationExample.wines.some))
+          .applyOnIf(api.metadata.get("doc_template").contains("remote"))(_.copy(documentation = ApiDocumentationExample.remote.some))
           .applyOnIf(api.metadata.get("doc_template").contains("remote_test"))(_.copy(documentation = ApiDocumentationExample.remoteTest.some))
           .applyOnIf(api.metadata.get("doc_template").contains("remote_wines"))(_.copy(documentation = ApiDocumentationExample.remoteWines.some))
           .applyOnIf(api.metadata.get("doc_template").contains("test"))(_.copy(documentation = ApiDocumentationExample.value.some))
