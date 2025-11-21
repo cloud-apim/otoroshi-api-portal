@@ -427,7 +427,6 @@ object OtoroshiApiPortal {
     api.consumers.find(c => c.status == ApiConsumerStatus.Published) match {
       case None => Results.Ok(baseTemplate(s"${api.name} - Subscriptions", config.prefix.getOrElse(""), api, doc, ctx)("")).as("text/html").vfuture
       case Some(consumer) => apikeysFromApiForUser(consumer, ctx).flatMap { apikeys =>
-        apikeys.foreach(_._2.clientSecret.debugPrintln)
         val sidebar = ApiDocumentationSidebar(Json.obj(
           "items" -> Json.arr(Json.obj(
             "label" -> "My apikeys",
