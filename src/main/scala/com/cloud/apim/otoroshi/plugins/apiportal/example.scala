@@ -5,7 +5,12 @@ import play.api.libs.json.Json
 import otoroshi.utils.syntax.implicits._
 
 object ApiDocumentationExample {
-  val remote = ApiDocumentation(
+  val remoteTest = ApiDocumentation(
+    source = Some(ApiDocumentationSource(Json.obj(
+      "url" -> "https://gist.githubusercontent.com/mathieuancelin/6cb4575d206a2028836b01b4e76a1518/raw/portal.config.json"
+    ))),
+  )
+  val remoteWines = ApiDocumentation(
     source = Some(ApiDocumentationSource(Json.obj(
       "url" -> "https://gist.githubusercontent.com/mathieuancelin/6cb4575d206a2028836b01b4e76a1518/raw/portal.config.json"
     ))),

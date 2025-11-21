@@ -1,0 +1,101 @@
+{
+  "enabled" : true,
+  "source" : null,
+  "home" : {
+    "path" : "/home",
+    "content_type" : "text/html",
+    "site_page" : true,
+    "transform" : "markdown",
+    "transform_wrapper" : "<div class=\"container-xxl\" style=\"margin-top: 30px;\">{content}</div>",
+    "text_content" : "<div class=\"container-xxl\" style=\"margin-top: 30px;\">\n\n# 🍷 Welcome to the Wine API\n\nDiscover the world of wines through data!\nThe **Wine API** gives you access to a rich catalog of wines, grape varieties, wineries, and wine regions from around the world. Whether you’re building an app for wine lovers, a recommendation engine, or an internal dashboard for your cellar — this API provides everything you need.\n\n---\n\n## 🌍 What You Can Do\n\n- **Browse wines** — Retrieve detailed information about wines, including tasting notes, vintage, grape composition, and producer details.\n- **Explore wine regions** — Discover wine-growing areas, appellations, and terroirs from every continent.\n- **Collect ratings and reviews** — Allow users to rate wines and leave comments to build community insights.\n- **Filter and search** — Find wines by region, grape variety, food pairing, or score.\n\n---\n\n## 🧭 Getting Started\n\n1. **Sign up** for an API key on this portal.\n2. **Check out the documentation** to learn about available endpoints.\n3. **Start querying** — for example, try:\n\n   ```bash\n   curl https://wines-api-sandbox-01j0vgh9zmnnzdmzn8jxbc40pe.cloud-apim.dev/api/wines?region=Bordeaux\n   ```\n\nto know more about it, go to the [documentation](/documentation)\n</div>\n"
+  },
+  "logo" : {
+    "url" : "https://github.com/react-bootcamp/react-workshop/raw/master/step-2-done/public/img/chevrol-bel-air.png",
+    "path" : "/favicon.png",
+    "content_type" : "image/png"
+  },
+  "references" : [ {
+    "title" : "Wines API",
+    "link" : "/openapi.json"
+  } ],
+  "resources" : [ {
+    "title" : "Wines API",
+    "path" : "/openapi.json",
+    "content_type" : "application/json",
+    "url" : "https://wines-api-sandbox-01j0vgh9zmnnzdmzn8jxbc40pe.cloud-apim.dev/docs/openapi.json"
+  }, {
+    "path" : "/documentation/getting-started",
+    "content_type" : "text/html",
+    "site_page" : true,
+    "transform" : "markdown",
+    "url" : "https://github.com/mathieuancelinserli/wines-api-cloud-apim-serverless/raw/refs/heads/main/docs/index.md"
+  }, {
+    "path" : "/documentation/latency",
+    "content_type" : "text/markdown",
+    "site_page" : true,
+    "transform" : "markdown",
+    "url" : "https://github.com/mathieuancelinserli/wines-api-cloud-apim-serverless/raw/refs/heads/main/docs/latency.md"
+  }, {
+    "path" : "/docs/winesapp.png",
+    "content_type" : "image/png",
+    "url" : "https://github.com/mathieuancelinserli/wines-api-cloud-apim-serverless/raw/refs/heads/main/docs/winesapp.png"
+  }, {
+    "path" : "/docs/defer.png",
+    "content_type" : "image/png",
+    "url" : "https://github.com/mathieuancelinserli/wines-api-cloud-apim-serverless/raw/refs/heads/main/docs/defer.png"
+  } ],
+  "navigation" : [ {
+    "label" : "Documentation",
+    "icon" : {
+      "css_icon_class" : "bi bi-journal-text me-2"
+    },
+    "path" : "/documentation",
+    "items" : [ {
+      "label" : "Information",
+      "kind" : "category",
+      "links" : [ {
+        "label" : "Getting started",
+        "link" : "/documentation/getting-started",
+        "icon" : {
+          "css_icon_class" : "bi bi-journal-text me-2"
+        }
+      }, {
+        "label" : "Latency",
+        "link" : "/documentation/latency",
+        "icon" : {
+          "css_icon_class" : "bi bi-journal-text me-2"
+        }
+      } ]
+    }, {
+      "label" : "API",
+      "kind" : "category",
+      "links" : [ {
+        "label" : "API Reference",
+        "link" : "/api-references",
+        "icon" : {
+          "css_icon_class" : "bi bi-journal-text me-2"
+        }
+      } ]
+    } ]
+  } ],
+  "redirections" : [ ],
+  "plans" : [ {
+    "id" : "dev",
+    "name" : "Dev",
+    "description" : "An apikey to try the API on prototypes",
+    "throttling_quota" : 100,
+    "daily_quota" : 1000,
+    "monthly_quota" : 1000,
+    "tags" : [ ],
+    "metadata" : {
+      "env" : "dev"
+    }
+  } ],
+  "footer" : null,
+  "search" : {
+    "enabled" : true
+  },
+  "banner" : null,
+  "metadata" : { },
+  "tags" : [ ]
+}
