@@ -1,6 +1,5 @@
 package otoroshi_plugins.com.cloud.apim.plugins.apiportal
 
-import akka.NotUsed
 import akka.stream.Materializer
 import akka.stream.scaladsl.{Sink, Source}
 import akka.util.ByteString
@@ -8,7 +7,7 @@ import next.models._
 import org.joda.time.DateTime
 import otoroshi.cluster.ClusterAgent
 import otoroshi.env.Env
-import otoroshi.models.{ApiIdentifier, ApiKey, EntityLocation}
+import otoroshi.models.{ApiIdentifier, ApiKey}
 import otoroshi.next.plugins.api._
 import otoroshi.next.proxy.NgProxyEngineError
 import otoroshi.security.IdGenerator
@@ -407,11 +406,9 @@ object OtoroshiApiPortal {
   def serverJs(api: Api, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(implicit  env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
     Results.Ok("console.log('portal loaded !')").as("text/javascript").vfuture
   }
-
   def servePlansJson(api: Api, doc: ApiDocumentation, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(implicit  env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
     Results.Ok(JsArray(doc.plans.map(_.raw))).vfuture
   }
-
   def serveDocumentationJson(api: Api, doc: ApiDocumentation, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(implicit  env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
     Results.Ok(doc.json.asObject - "source" ++ Json.obj(
       "name" -> api.name,
@@ -422,7 +419,6 @@ object OtoroshiApiPortal {
       "doc_metadata" -> doc.metadata,
     )).vfuture
   }
-
   def serveApikeysPage(api: Api, doc: ApiDocumentation, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(implicit  env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
     api.consumers.find(c => c.status == ApiConsumerStatus.Published) match {
       case None => Results.Ok(baseTemplate(s"${api.name} - Subscriptions", config.prefix.getOrElse(""), api, doc, ctx)("")).as("text/html").vfuture
@@ -616,12 +612,6 @@ object OtoroshiApiPortal {
   def serveCreateApikey(api: Api, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(implicit  env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
     ctx.request.body.runFold(ByteString.empty)(_ ++ _).flatMap { body =>
       val bodyJson = Json.parse(body.utf8String)
-      val consumer_id = bodyJson.select("consumer").asOpt[String].orElse(
-        api.consumers
-          .filter(c => c.status == ApiConsumerStatus.Published)
-          .find(c => c.consumerKind == ApiConsumerKind.Apikey)
-          .map(_.id)
-      ).get
       val nameOpt = bodyJson.select("name").asOpt[String]
       val descriptionOpt = bodyJson.select("description").asOpt[String]
       val enabledOpt = bodyJson.select("enabled").asOpt[Boolean]
@@ -630,11 +620,11 @@ object OtoroshiApiPortal {
 
       (for {
         user <- ctx.user
-        consumer <- api.consumers
-          .filter(c => c.status == ApiConsumerStatus.Published)
-          .find(_.id == consumer_id) if consumer.consumerKind == ApiConsumerKind.Apikey
         doc <- api.documentation
         plan <- doc.plans.find(p => planOpt.contains(p.id)).orElse(doc.plans.headOption)
+        consumer <- api.consumers.find(v => plan.consumerId.contains(v.id)).orElse(
+          api.consumers.find(c => c.status == ApiConsumerStatus.Published && c.consumerKind == ApiConsumerKind.Apikey)
+        )
       } yield {
         val sub_id = s"api-consumer-subscription_${IdGenerator.uuid}"
         val clientId = IdGenerator.lowerCaseToken(16)
