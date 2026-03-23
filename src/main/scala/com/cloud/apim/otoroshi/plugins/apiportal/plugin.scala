@@ -274,7 +274,7 @@ object OtoroshiApiPortal {
             Json.obj(
               "label" -> r.title.json,
               "link" -> s"${config.prefix.getOrElse("")}/api-references${r.link}",
-              "icon" -> r.icon.map(_.raw).getOrElse(Json.obj("text_content" -> "bi bi-braces")).asValue
+              "icon" -> r.icon.map(_.raw).getOrElse(Json.obj("css_icon_class" -> "bi bi-braces")).asValue
             )
           }
         )
@@ -282,15 +282,24 @@ object OtoroshiApiPortal {
       specPath match {
         case None => {
           Results.Ok(documentationPageTemplate(s"${api.name} - API References", config.prefix.getOrElse(""), api, doc, sidebar, ctx)(
-            s"""<div style="width: 100%; display: flex; flex-direction: row; justify-content: center;">
-               |  <div class="container-xxl api-references-container" style="display: flex; flex-direction: row; flex-wrap: wrap;">
+            s"""<div class="space-y-6">
+               |  <section class="rounded-[28px] border border-slate-200/80 bg-gradient-to-br from-white to-stone-100 p-7 shadow-sm dark:border-white/10 dark:from-slate-900 dark:to-slate-900/70">
+               |    <span class="portal-eyebrow">Reference</span>
+               |    <h1 class="portal-page-title">API references</h1>
+               |    <p class="portal-page-subtitle">Pick a specification and explore operations, schemas and live examples.</p>
+               |  </section>
+               |  <div class="grid gap-4 md:grid-cols-2">
                |    ${doc.references.map(r => s"""
-               |    |<a href="${config.prefix.getOrElse("")}/api-references${r.link}">
-               |    |  <div class="card" style="width: 18rem; margin: 10px;">
-               |    |    <div class="card-body">
-               |    |      <h5 class="card-title">${r.title}</h5>
-               |    |      <p class="card-text">${r.description.getOrElse("...")}</p>
+               |    |<a class="group rounded-[26px] border border-slate-200/80 bg-white/90 p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-lg dark:border-white/10 dark:bg-slate-900/80" href="${config.prefix.getOrElse("")}/api-references${r.link}">
+               |    |  <div class="flex items-start justify-between gap-4">
+               |    |    <div class="space-y-3">
+               |    |      <div class="inline-flex h-11 w-11 items-center justify-center rounded-2xl bg-sky-50 text-sky-700 dark:bg-sky-500/10 dark:text-sky-300">${renderResourceAsIcon(r.icon, doc)}</div>
+               |    |      <div>
+               |    |        <h2 class="text-xl font-semibold tracking-tight text-slate-950 dark:text-white">${r.title}</h2>
+               |    |        <p class="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">${r.description.getOrElse("Open the specification and inspect endpoints, examples and response shapes.")}</p>
+               |    |      </div>
                |    |    </div>
+               |    |    <span class="inline-flex items-center gap-2 rounded-full bg-stone-100 px-3 py-1 text-sm font-medium text-slate-600 transition group-hover:bg-slate-950 group-hover:text-white dark:bg-white/10 dark:text-slate-300 dark:group-hover:bg-white dark:group-hover:text-slate-950">Open <i class="bi bi-arrow-right"></i></span>
                |    |  </div>
                |    |</a>
                |    |""".stripMargin).mkString("\n")}
@@ -303,8 +312,13 @@ object OtoroshiApiPortal {
             case None => Results.NotFound("Not found inner !").vfuture
             case Some(ref) => {
               Results.Ok(documentationPageTemplate(s"${api.name} - API Reference", config.prefix.getOrElse(""), api, doc, sidebar, ctx, noInnerPadding = true)(
-                s"""<div style="width: 100%; display: flex; flex-direction: row; justify-content: center;">
-                   |  <div class="container-xxl redoc-container-div" style="display: flex; flex-direction: row; padding-right: 0px; padding-left: 0px;">
+                s"""<div class="space-y-6 p-6 sm:p-8">
+                   |  <section class="rounded-[28px] border border-slate-200/80 bg-gradient-to-br from-white to-stone-100 p-7 shadow-sm dark:border-white/10 dark:from-slate-900 dark:to-slate-900/70">
+                   |    <span class="portal-eyebrow">Reference</span>
+                   |    <h1 class="portal-page-title">${ref.title}</h1>
+                   |    <p class="portal-page-subtitle">Read operations, inspect examples and launch the built-in tester directly from the reference.</p>
+                   |  </section>
+                   |  <div class="portal-redoc-shell overflow-hidden rounded-[28px] border border-slate-200/80 bg-white shadow-sm dark:border-white/10 dark:bg-slate-950">
                    |    <redoc
                    |       spec-url="${config.prefix.getOrElse("")}${ref.link}"
                    |       hideHostname="false"
@@ -314,33 +328,27 @@ object OtoroshiApiPortal {
                    |  <script>
                    |    var interval = null;
                    |    interval = setInterval(function() {
-                   |      console.log('interval');
                    |      var menu = document.querySelector('redoc .menu-content');
                    |      if (menu) {
-                   |        console.log('infecting redoc ...');
-                   |        [].slice.call(document.querySelectorAll('.sc-iGgWBj.sc-gsFSXq.lbpUdJ.bOFhJE')).map(node => {
-                   |          const button = document.createElement('button');
-                   |          button.type = "button";
-                   |          button.className = "btn btn-success";
-                   |          button.innerHTML = "Test endpoint <i class=\\"bi bi-play-circle\\"></i>";
-                   |          button.setAttribute('style', "--bs-btn-padding-y: 0.08rem;--bs-btn-padding-x: 0.2rem;--bs-btn-font-size: 0.7rem;margin-bottom: 10px;");
+                   |        [].slice.call(document.querySelectorAll('.sc-iGgWBj.sc-gsFSXq.lbpUdJ.bOFhJE')).map(function(node) {
+                   |          if (node.querySelector('.portal-redoc-action')) { return; }
+                   |          var button = document.createElement('button');
+                   |          button.type = 'button';
+                   |          button.className = 'portal-redoc-action';
+                   |          button.innerHTML = '<span>Try it</span>';
                    |          button.addEventListener('click', function() {
-                   |            console.log('test', node);
-                   |            const verb = node.childNodes[1].childNodes[0].childNodes[0].getAttribute('type').toUpperCase();
-                   |            const url = node.childNodes[1].childNodes[1].childNodes[0].childNodes[1].childNodes[0].textContent;
-                   |            let body = null;
-                   |            let presetHeaders = { 'Accept': 'application/json' };
+                   |            var verb = node.childNodes[1].childNodes[0].childNodes[0].getAttribute('type').toUpperCase();
+                   |            var url = node.childNodes[1].childNodes[1].childNodes[0].childNodes[1].childNodes[0].textContent;
+                   |            var body = null;
+                   |            var presetHeaders = { 'Accept': 'application/json' };
                    |            if (node.childNodes.length === 4) {
                    |              body = node.childNodes[2].querySelector('code').textContent;
-                   |              presetHeaders['Content-Type'] = 'application/json'
+                   |              presetHeaders['Content-Type'] = 'application/json';
                    |            }
-                   |            openApiTester({ verb, url, presetBody: body, presetHeaders });
+                   |            openApiTester({ method: verb, url: url, presetBody: body, presetHeaders: presetHeaders });
                    |          });
                    |          node.prepend(button);
                    |        });
-                   |        clearInterval(interval);
-                   |      } else if (error && error.textContent.indexOf('Something went wrong...') > -1) {
-                   |        console.log('found redoc error');
                    |        clearInterval(interval);
                    |      }
                    |    }, 200);
@@ -353,56 +361,561 @@ object OtoroshiApiPortal {
       }
     } else if (doc.references.nonEmpty) {
       Results.Ok(baseTemplate(s"${api.name} - API Reference", config.prefix.getOrElse(""), api, doc, ctx)(
-        s"""<div style="width: 100%; display: flex; flex-direction: row; justify-content: center;">
-           |  <div class="container-xxl" style="display: flex; flex-direction: row;">
-           |    <redoc
-           |       spec-url="${config.prefix.getOrElse("")}${doc.references.headOption.map(_.link).getOrElse("/openapi.json")}"
-           |       hideHostname="false"
-           |       showObjectSchemaExamples="true"
-           |    ></redoc>
-           |  <script>
-           |    var interval = null;
-           |    interval = setInterval(function() {
-           |      console.log('interval');
-           |      var menu = document.querySelector('redoc .menu-content');
-           |      if (menu) {
-           |        console.log('infecting redoc ...');
-           |        [].slice.call(document.querySelectorAll('.sc-iGgWBj.sc-gsFSXq.lbpUdJ.bOFhJE')).map(node => {
-           |          const button = document.createElement('button');
-           |          button.type = "button";
-           |          button.className = "btn btn-success";
-           |          button.innerHTML = "Test endpoint <i class=\\"bi bi-play-circle\\"></i>";
-           |          button.setAttribute('style', "--bs-btn-padding-y: 0.08rem;--bs-btn-padding-x: 0.2rem;--bs-btn-font-size: 0.7rem;margin-bottom: 10px;");
-           |          button.addEventListener('click', function() {
-           |            console.log('test', node);
-           |            const verb = node.childNodes[1].childNodes[0].childNodes[0].getAttribute('type').toUpperCase();
-           |            const url = node.childNodes[1].childNodes[1].childNodes[0].childNodes[1].childNodes[0].textContent;
-           |            let body = null;
-           |            let presetHeaders = { 'Accept': 'application/json' };
-           |            if (node.childNodes.length === 4) {
-           |              body = node.childNodes[2].querySelector('code').textContent;
-           |              presetHeaders['Content-Type'] = 'application/json'
-           |            }
-           |            openApiTester({ verb, url, presetBody: body, presetHeaders });
-           |          });
-           |          node.prepend(button);
-           |        });
-           |        clearInterval(interval);
-           |      } else if (error && error.textContent.indexOf('Something went wrong...') > -1) {
-           |        console.log('found redoc error');
-           |        clearInterval(interval);
-           |      }
-           |    }, 200);
-           |  </script>
+        s"""<section class="pb-14 pt-8 lg:pt-10">
+           |  <div class="container-xxl space-y-6">
+           |    <section class="rounded-[28px] border border-slate-200/80 bg-gradient-to-br from-white to-stone-100 p-7 shadow-sm dark:border-white/10 dark:from-slate-900 dark:to-slate-900/70">
+           |      <span class="portal-eyebrow">Reference</span>
+           |      <h1 class="portal-page-title">${doc.references.head.title}</h1>
+           |      <p class="portal-page-subtitle">Inspect request shapes, read examples and launch the tester from any operation.</p>
+           |    </section>
+           |    <div class="portal-redoc-shell overflow-hidden rounded-[28px] border border-slate-200/80 bg-white shadow-sm dark:border-white/10 dark:bg-slate-950">
+           |      <redoc
+           |         spec-url="${config.prefix.getOrElse("")}${doc.references.headOption.map(_.link).getOrElse("/openapi.json")}"
+           |         hideHostname="false"
+           |         showObjectSchemaExamples="true"
+           |      ></redoc>
+           |      <script>
+           |        var interval = null;
+           |        interval = setInterval(function() {
+           |          var menu = document.querySelector('redoc .menu-content');
+           |          if (menu) {
+           |            [].slice.call(document.querySelectorAll('.sc-iGgWBj.sc-gsFSXq.lbpUdJ.bOFhJE')).map(function(node) {
+           |              if (node.querySelector('.portal-redoc-action')) { return; }
+           |              var button = document.createElement('button');
+           |              button.type = 'button';
+           |              button.className = 'portal-redoc-action';
+           |              button.innerHTML = '<span>Try it</span>';
+           |              button.addEventListener('click', function() {
+           |                var verb = node.childNodes[1].childNodes[0].childNodes[0].getAttribute('type').toUpperCase();
+           |                var url = node.childNodes[1].childNodes[1].childNodes[0].childNodes[1].childNodes[0].textContent;
+           |                var body = null;
+           |                var presetHeaders = { 'Accept': 'application/json' };
+           |                if (node.childNodes.length === 4) {
+           |                  body = node.childNodes[2].querySelector('code').textContent;
+           |                  presetHeaders['Content-Type'] = 'application/json';
+           |                }
+           |                openApiTester({ method: verb, url: url, presetBody: body, presetHeaders: presetHeaders });
+           |              });
+           |              node.prepend(button);
+           |            });
+           |            clearInterval(interval);
+           |          }
+           |        }, 200);
+           |      </script>
+           |    </div>
            |  </div>
-           |</div>""".stripMargin
+           |</section>""".stripMargin
       )).as("text/html").vfuture
     } else {
       Results.NotFound("Not found !").vfuture
     }
   }
   def serverJs(api: Api, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(implicit  env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
-    Results.Ok("console.log('portal loaded !')").as("text/javascript").vfuture
+    Results.Ok(
+      s"""
+         |(() => {
+         |  const root = document.documentElement;
+         |  const body = document.body;
+         |  const prefix = body.dataset.portalPrefix || '';
+         |
+         |  const byId = (id) => document.getElementById(id);
+         |  const prefixPath = (path) => prefix + path;
+         |  const pretty = (value) => {
+         |    try { return JSON.stringify(value, null, 2); } catch (e) { return String(value); }
+         |  };
+         |  const tryParseJSON = (str) => {
+         |    if (!str || !str.trim()) return null;
+         |    try { return JSON.parse(str); } catch (e) { throw new Error('Invalid JSON'); }
+         |  };
+         |  const copyToClipboard = async (text) => {
+         |    try {
+         |      if (navigator.clipboard && navigator.clipboard.writeText) {
+         |        await navigator.clipboard.writeText(text);
+         |        return true;
+         |      }
+         |      const area = document.createElement('textarea');
+         |      area.value = text;
+         |      document.body.appendChild(area);
+         |      area.select();
+         |      document.execCommand('copy');
+         |      document.body.removeChild(area);
+         |      return true;
+         |    } catch (e) {
+         |      return false;
+         |    }
+         |  };
+         |
+         |  const themeMedia = window.matchMedia('(prefers-color-scheme: dark)');
+         |  const resolveTheme = (mode) => {
+         |    if (mode === 'system') {
+         |      return themeMedia.matches ? 'dark' : 'light';
+         |    }
+         |    return mode === 'dark' ? 'dark' : 'light';
+         |  };
+         |
+         |  const applyThemeMode = (mode) => {
+         |    const resolvedTheme = resolveTheme(mode);
+         |    root.classList.toggle('dark', resolvedTheme === 'dark');
+         |    root.dataset.themeMode = mode;
+         |    localStorage.setItem('portal-theme-mode', mode);
+         |    const select = byId('themeSelect');
+         |    if (select) {
+         |      select.value = mode;
+         |    }
+         |  };
+         |
+         |  const openModal = (id) => {
+         |    const modal = byId(id);
+         |    if (!modal) return;
+         |    modal.classList.remove('hidden');
+         |    modal.classList.add('flex');
+         |    modal.setAttribute('aria-hidden', 'false');
+         |    body.classList.add('overflow-hidden');
+         |    const autofocus = modal.querySelector('[data-autofocus], input, textarea, select, button');
+         |    if (autofocus) autofocus.focus();
+         |  };
+         |
+         |  const closeModal = (id) => {
+         |    const modal = byId(id);
+         |    if (!modal) return;
+         |    modal.classList.add('hidden');
+         |    modal.classList.remove('flex');
+         |    modal.setAttribute('aria-hidden', 'true');
+         |    if (!document.querySelector('.portal-modal.flex')) {
+         |      body.classList.remove('overflow-hidden');
+         |    }
+         |  };
+         |
+         |  window.portalOpenModal = openModal;
+         |  window.portalCloseModal = closeModal;
+         |
+         |  document.addEventListener('click', async (event) => {
+         |    const toggle = event.target.closest('[data-portal-toggle]');
+         |    if (toggle) {
+         |      const target = byId(toggle.getAttribute('data-portal-toggle'));
+         |      if (target) {
+         |        target.classList.toggle('hidden');
+         |      }
+         |      return;
+         |    }
+         |
+         |    const openTrigger = event.target.closest('[data-modal-open]');
+         |    if (openTrigger) {
+         |      openModal(openTrigger.getAttribute('data-modal-open'));
+         |      return;
+         |    }
+         |
+         |    const closeTrigger = event.target.closest('[data-modal-close]');
+         |    if (closeTrigger) {
+         |      closeModal(closeTrigger.getAttribute('data-modal-close'));
+         |      return;
+         |    }
+         |
+         |    const backdrop = event.target.classList.contains('portal-modal') ? event.target : null;
+         |    if (backdrop) {
+         |      closeModal(backdrop.id);
+         |      return;
+         |    }
+         |
+         |    const copyBearer = event.target.closest('.apikey-bearer-copy');
+         |    if (copyBearer) {
+         |      await copyToClipboard(copyBearer.getAttribute('data-bearer') || '');
+         |      return;
+         |    }
+         |
+         |    const editApikey = event.target.closest('.apikey-edit');
+         |    if (editApikey && window.openApiKeyEditor) {
+         |      window.openApiKeyEditor({
+         |        mode: 'update',
+         |        apikey: {
+         |          client_id: editApikey.getAttribute('data-client-id'),
+         |          name: editApikey.getAttribute('data-name'),
+         |          description: editApikey.getAttribute('data-description'),
+         |          bearer: editApikey.getAttribute('data-bearer'),
+         |          enabled: editApikey.getAttribute('data-enabled') === 'true',
+         |          plan: editApikey.getAttribute('data-plan')
+         |        }
+         |      });
+         |      return;
+         |    }
+         |
+         |    const createApikey = event.target.closest('.apikey-create');
+         |    if (createApikey && window.openApiKeyEditor) {
+         |      window.openApiKeyEditor({ mode: 'create' });
+         |      return;
+         |    }
+         |
+         |    const deleteApikey = event.target.closest('.apikey-delete');
+         |    if (deleteApikey) {
+         |      const clientId = deleteApikey.getAttribute('data-client-id');
+         |      const ok = window.confirm('Are you sure you want to delete this API key?');
+         |      if (!ok) return;
+         |      await fetch(prefixPath('/api/apikeys/' + encodeURIComponent(clientId)), {
+         |        method: 'DELETE',
+         |        credentials: 'include'
+         |      });
+         |      window.location.reload();
+         |    }
+         |  });
+         |
+         |  document.addEventListener('keydown', (event) => {
+         |    if (event.key === 'Escape') {
+         |      const opened = document.querySelector('.portal-modal.flex');
+         |      if (opened) closeModal(opened.id);
+         |    }
+         |  });
+         |
+         |  const themeSelect = byId('themeSelect');
+         |  if (themeSelect) {
+         |    themeSelect.addEventListener('change', (event) => {
+         |      applyThemeMode(event.target.value || 'system');
+         |    });
+         |  }
+         |
+         |  themeMedia.addEventListener('change', () => {
+         |    if ((root.dataset.themeMode || 'system') === 'system') {
+         |      applyThemeMode('system');
+         |    }
+         |  });
+         |
+         |  const setupApiKeyEditor = () => {
+         |    const modalEl = byId('apiKeyEditorModal');
+         |    if (!modalEl) return;
+         |
+         |    const titleEl = byId('apiKeyEditorTitle');
+         |    const modeBadge = byId('apiKeyEditorModeBadge');
+         |    const msgEl = byId('apiKeyEditorMsg');
+         |    const nameEl = byId('apiKeyEditorName');
+         |    const descEl = byId('apiKeyEditorDesc');
+         |    const enabledEl = byId('apiKeyEditorEnabled');
+         |    const planRow = byId('apiKeyEditorPlanRow');
+         |    const planDisplay = byId('apiKeyEditorPlanDisplay');
+         |    const planInput = byId('apiKeyEditorDisplay');
+         |    const planSel = byId('apiKeyEditorPlan');
+         |    const planHelp = byId('apiKeyEditorPlanHelp');
+         |    const planHelp2 = byId('apiKeyEditorPlanHelp2');
+         |    const cidRow = byId('apiKeyEditorClientIdRow');
+         |    const cidEl = byId('apiKeyEditorClientId');
+         |    const bearerRow = byId('apiKeyEditorBearerRow');
+         |    const bearerEl = byId('apiKeyEditorBearer');
+         |    const btnShow = byId('apiKeyEditorToggleBearer');
+         |    const btnCopy = byId('apiKeyEditorCopyBearer');
+         |    const btnSave = byId('apiKeyEditorSubmitBtn');
+         |
+         |    const setBusy = (busy) => {
+         |      [nameEl, descEl, enabledEl, planSel, btnShow, btnCopy, btnSave].forEach((el) => {
+         |        if (el) el.disabled = !!busy;
+         |      });
+         |    };
+         |
+         |    const showMsg = (text, kind) => {
+         |      msgEl.textContent = text || '';
+         |      msgEl.className = 'portal-feedback ' + (
+         |        kind === 'success' ? 'portal-feedback-success' :
+         |        kind === 'warning' ? 'portal-feedback-warning' :
+         |        kind === 'danger' ? 'portal-feedback-danger' :
+         |        'portal-feedback-muted'
+         |      );
+         |    };
+         |
+         |    const resetMsg = () => showMsg('', '');
+         |
+         |    const loadPlans = async () => {
+         |      const mode = modeBadge.textContent || 'create';
+         |      planSel.innerHTML = '<option value="">Choose a plan</option>';
+         |      planHelp.textContent = '';
+         |      try {
+         |        const res = await fetch(prefixPath('/api/plans'), { method: 'GET', credentials: 'include' });
+         |        if (!res.ok) throw new Error('Unable to load plans');
+         |        const plans = await res.json();
+         |        if (!Array.isArray(plans)) return;
+         |        if (mode === 'create') {
+         |          plans.forEach((plan) => {
+         |            const opt = document.createElement('option');
+         |            opt.value = plan.id;
+         |            opt.textContent = plan.name || plan.id;
+         |            opt.dataset.description = plan.description || '';
+         |            planSel.appendChild(opt);
+         |          });
+         |          planSel.onchange = () => {
+         |            const option = planSel.options[planSel.selectedIndex];
+         |            planHelp.textContent = option && option.dataset ? option.dataset.description || '' : '';
+         |          };
+         |        } else {
+         |          const plan = plans.find((item) => item.id === planInput.value);
+         |          if (plan) {
+         |            planInput.value = plan.name || plan.id;
+         |            planHelp2.textContent = plan.description || '';
+         |          }
+         |        }
+         |      } catch (e) {
+         |        showMsg('Unable to load plans', 'warning');
+         |      }
+         |    };
+         |
+         |    btnShow.addEventListener('click', () => {
+         |      bearerEl.type = bearerEl.type === 'password' ? 'text' : 'password';
+         |    });
+         |
+         |    btnCopy.addEventListener('click', async () => {
+         |      const ok = await copyToClipboard(bearerEl.value || '');
+         |      showMsg(ok ? 'Bearer copied' : 'Copy failed', ok ? 'success' : 'danger');
+         |      setTimeout(resetMsg, 1800);
+         |    });
+         |
+         |    btnSave.addEventListener('click', async () => {
+         |      resetMsg();
+         |      const mode = modeBadge.textContent || 'create';
+         |      setBusy(true);
+         |      try {
+         |        if (mode === 'create') {
+         |          const payload = {
+         |            name: nameEl.value.trim(),
+         |            description: descEl.value.trim(),
+         |            enabled: !!enabledEl.checked,
+         |            plan: planSel.value
+         |          };
+         |          const res = await fetch(prefixPath('/api/apikeys'), {
+         |            method: 'POST',
+         |            headers: { 'content-type': 'application/json' },
+         |            body: JSON.stringify(payload),
+         |            credentials: 'include'
+         |          });
+         |          if (!res.ok) throw new Error('Create failed');
+         |          showMsg('API key created', 'success');
+         |          setTimeout(() => {
+         |            closeModal('apiKeyEditorModal');
+         |            window.location.reload();
+         |          }, 600);
+         |        } else {
+         |          const clientId = cidEl.value;
+         |          const payload = {
+         |            name: nameEl.value.trim(),
+         |            description: descEl.value.trim(),
+         |            enabled: !!enabledEl.checked
+         |          };
+         |          const res = await fetch(prefixPath('/api/apikeys/' + encodeURIComponent(clientId)), {
+         |            method: 'PUT',
+         |            headers: { 'content-type': 'application/json' },
+         |            body: JSON.stringify(payload),
+         |            credentials: 'include'
+         |          });
+         |          if (!res.ok) throw new Error('Update failed');
+         |          showMsg('API key updated', 'success');
+         |          setTimeout(() => {
+         |            closeModal('apiKeyEditorModal');
+         |            window.location.reload();
+         |          }, 600);
+         |        }
+         |      } catch (e) {
+         |        showMsg(e.message || 'Unexpected error', 'danger');
+         |      } finally {
+         |        setBusy(false);
+         |      }
+         |    });
+         |
+         |    window.openApiKeyEditor = async ({ mode = 'create', apikey = null } = {}) => {
+         |      resetMsg();
+         |      nameEl.value = '';
+         |      descEl.value = '';
+         |      enabledEl.checked = true;
+         |      planSel.value = '';
+         |      planInput.value = '';
+         |      planHelp.textContent = '';
+         |      planHelp2.textContent = '';
+         |
+         |      if (mode === 'update') {
+         |        titleEl.textContent = 'Update API key';
+         |        modeBadge.textContent = 'update';
+         |        modeBadge.hidden = false;
+         |        cidRow.hidden = false;
+         |        bearerRow.hidden = false;
+         |        planRow.hidden = true;
+         |        planDisplay.hidden = false;
+         |        const key = apikey || {};
+         |        cidEl.value = key.client_id || '';
+         |        nameEl.value = key.name || '';
+         |        descEl.value = key.description || '';
+         |        enabledEl.checked = !!key.enabled;
+         |        planInput.value = key.plan || '';
+         |        bearerEl.value = key.bearer || '';
+         |        bearerEl.type = 'password';
+         |      } else {
+         |        titleEl.textContent = 'Create API key';
+         |        modeBadge.textContent = 'create';
+         |        modeBadge.hidden = true;
+         |        cidRow.hidden = true;
+         |        bearerRow.hidden = true;
+         |        planRow.hidden = false;
+         |        planDisplay.hidden = true;
+         |      }
+         |
+         |      await loadPlans();
+         |      openModal('apiKeyEditorModal');
+         |    };
+         |  };
+         |
+         |  const setupApiTester = () => {
+         |    const modalEl = byId('apiTesterModal');
+         |    if (!modalEl) return;
+         |
+         |    const methodBadge = byId('apiTesterMethod');
+         |    const urlInput = byId('apiTesterUrl');
+         |    const secretWarn = byId('apiTesterSecretWarn');
+         |    const apiKeySelect = byId('apiTesterApiKeySelect');
+         |    const headersArea = byId('apiTesterHeaders');
+         |    const bodyArea = byId('apiTesterBody');
+         |    const statusEl = byId('apiTesterStatus');
+         |    const durationEl = byId('apiTesterDuration');
+         |    const responseHeadersEl = byId('apiTesterRespHeaders');
+         |    const responseBodyEl = byId('apiTesterRespBody');
+         |    const errorEl = byId('apiTesterError');
+         |    const btnSend = byId('apiTesterSendBtn');
+         |    const btnResetHeaders = byId('apiTesterResetHeaders');
+         |    const btnClearResponse = byId('apiTesterClearResponse');
+         |    const defaultHeaders = { accept: 'application/json' };
+         |
+         |    const updateSecretBanner = () => {
+         |      const content = (headersArea.value || '') + ' ' + (bodyArea.value || '');
+         |      const danger = /authorization|secret|token|apikey|api[-_ ]key/i.test(content);
+         |      secretWarn.classList.toggle('hidden', !danger);
+         |    };
+         |
+         |    const loadApiKeys = async () => {
+         |      apiKeySelect.innerHTML = '<option value="">No API key</option>';
+         |      try {
+         |        const res = await fetch(prefixPath('/api/apikeys'), { method: 'GET', credentials: 'include' });
+         |        if (!res.ok) return;
+         |        const keys = await res.json();
+         |        if (!Array.isArray(keys)) return;
+         |        keys.forEach((key, index) => {
+         |          const option = document.createElement('option');
+         |          option.value = String(index);
+         |          option.textContent = (key.name || 'API key') + ' (' + (key.client_id || '-') + ')';
+         |          option.dataset.bearer = key.bearer || '';
+         |          apiKeySelect.appendChild(option);
+         |        });
+         |      } catch (e) {
+         |        console.warn('Unable to load API keys', e);
+         |      }
+         |    };
+         |
+         |    apiKeySelect.addEventListener('change', () => {
+         |      const option = apiKeySelect.options[apiKeySelect.selectedIndex];
+         |      const bearer = option && option.dataset ? option.dataset.bearer || '' : '';
+         |      let headers = defaultHeaders;
+         |      try {
+         |        headers = tryParseJSON(headersArea.value) || { ...defaultHeaders };
+         |      } catch (e) {
+         |        headers = { ...defaultHeaders };
+         |      }
+         |      if (bearer) headers.authorization = 'Bearer ' + bearer;
+         |      headersArea.value = pretty(headers);
+         |      updateSecretBanner();
+         |    });
+         |
+         |    headersArea.addEventListener('input', updateSecretBanner);
+         |    bodyArea.addEventListener('input', updateSecretBanner);
+         |
+         |    btnResetHeaders.addEventListener('click', () => {
+         |      headersArea.value = pretty(defaultHeaders);
+         |      updateSecretBanner();
+         |    });
+         |
+         |    btnClearResponse.addEventListener('click', () => {
+         |      statusEl.textContent = '-';
+         |      durationEl.textContent = '-';
+         |      responseHeadersEl.textContent = '';
+         |      responseBodyEl.textContent = '';
+         |      errorEl.textContent = '';
+         |    });
+         |
+         |    btnSend.addEventListener('click', async () => {
+         |      errorEl.textContent = '';
+         |      statusEl.textContent = '...';
+         |      durationEl.textContent = '...';
+         |      responseHeadersEl.textContent = '';
+         |      responseBodyEl.textContent = '';
+         |
+         |      let headers;
+         |      let requestBody;
+         |      try {
+         |        headers = tryParseJSON(headersArea.value) || {};
+         |      } catch (e) {
+         |        errorEl.textContent = 'Invalid headers JSON';
+         |        return;
+         |      }
+         |      try {
+         |        requestBody = tryParseJSON(bodyArea.value);
+         |      } catch (e) {
+         |        errorEl.textContent = 'Invalid body JSON';
+         |        return;
+         |      }
+         |
+         |      const started = performance.now();
+         |      try {
+         |        const res = await fetch(prefixPath('/api/_test'), {
+         |          method: 'POST',
+         |          credentials: 'include',
+         |          headers: { 'content-type': 'application/json' },
+         |          body: JSON.stringify({
+         |            method: methodBadge.textContent,
+         |            url: urlInput.value,
+         |            headers: headers,
+         |            body_json: requestBody
+         |          })
+         |        });
+         |        const payload = await res.json();
+         |        durationEl.textContent = Math.round(performance.now() - started) + ' ms';
+         |        statusEl.textContent = String(payload.status || '-') + ' ' + String(payload.statusText || '');
+         |        responseHeadersEl.textContent = pretty(payload.headers || {});
+         |        const responseHeaders = payload.headers || {};
+         |        const contentType = responseHeaders['content-type'] || responseHeaders['Content-Type'] || '';
+         |        if (contentType.indexOf('json') > -1) {
+         |          try {
+         |            responseBodyEl.textContent = pretty(JSON.parse(payload.body_str || '{}'));
+         |          } catch (e) {
+         |            responseBodyEl.textContent = payload.body_str || '';
+         |          }
+         |        } else {
+         |          responseBodyEl.textContent = payload.body_str || '';
+         |        }
+         |      } catch (e) {
+         |        durationEl.textContent = Math.round(performance.now() - started) + ' ms';
+         |        statusEl.textContent = '-';
+         |        errorEl.textContent = e.message || 'Request failed';
+         |      }
+         |    });
+         |
+         |    window.openApiTester = async ({ url, method = 'GET', presetHeaders = null, presetBody = null } = {}) => {
+         |      methodBadge.textContent = String(method || 'GET').toUpperCase();
+         |      urlInput.value = url || '';
+         |      headersArea.value = pretty(presetHeaders && typeof presetHeaders === 'object' ? presetHeaders : defaultHeaders);
+         |      if (typeof presetBody === 'string') {
+         |        bodyArea.value = presetBody;
+         |      } else if (presetBody) {
+         |        bodyArea.value = pretty(presetBody);
+         |      } else {
+         |        bodyArea.value = '';
+         |      }
+         |      statusEl.textContent = '-';
+         |      durationEl.textContent = '-';
+         |      responseHeadersEl.textContent = '';
+         |      responseBodyEl.textContent = '';
+         |      errorEl.textContent = '';
+         |      await loadApiKeys();
+         |      updateSecretBanner();
+         |      openModal('apiTesterModal');
+         |    };
+         |  };
+         |
+         |  const preferredThemeMode = localStorage.getItem('portal-theme-mode') || 'system';
+         |  applyThemeMode(preferredThemeMode);
+         |  setupApiKeyEditor();
+         |  setupApiTester();
+         |})();
+         |""".stripMargin
+    ).as("text/javascript").vfuture
   }
   def servePlansJson(api: Api, doc: ApiDocumentation, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(implicit  env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
     Results.Ok(JsArray(doc.plans.map(_.raw))).vfuture
@@ -418,109 +931,126 @@ object OtoroshiApiPortal {
     )).vfuture
   }
   def serveApikeysPage(api: Api, doc: ApiDocumentation, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(implicit  env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
-    Source(api.plans.filter(c => c.status == ApiPlanStatus.Published).toList).mapAsync(1) { plan =>
+    val publishedPlans = api.plans.filter(c => c.status == ApiPlanStatus.Published)
+    Source(publishedPlans.toList).mapAsync(1) { plan =>
       apikeysFromApiForUser(plan, ctx).map(_.map(t => (t._1, t._2, plan)))
     }
     .flatMapConcat(seq => Source(seq.toList))
     .runWith(Sink.seq)
     .flatMap { apikeys =>
+      val waitingCount = apikeys.count(_._2.metadata.get("waiting-approval").contains("true"))
+      val activeCount = apikeys.count(_._2.enabled)
       val sidebar = ApiDocumentationSidebar(Json.obj(
         "items" -> Json.arr(Json.obj(
           "label" -> "My apikeys",
           "link" -> s"${config.prefix.getOrElse("")}/subscriptions/apikeys",
-          "icon" -> Json.obj("text_content" -> "bi bi-key")
+          "icon" -> Json.obj("css_icon_class" -> "bi bi-key")
         ))
       ))
       Results.Ok(documentationPageTemplate(s"${api.name} - Subscriptions", config.prefix.getOrElse(""), api, doc, sidebar, ctx)(
-        s"""<div>
-           |  <div style="width: 100%; display: flex; flex-direction: row; justify-content: flex-end;">
-           |    <button type="button" class="btn btn-sm btn-outline-primary apikey-create"><span class="bi bi-plus-circle" /> apikey</button>
-           |  </div>
-           |  <table class="table">
-           |    <thead>
-           |      <tr>
-           |        <th scope="col">#</th>
-           |        <th scope="col">Name</th>
-           |        <th scope="col">Enabled</th>
-           |        <th scope="col">Status</th>
-           |        <th scope="col">Actions</th>
-           |      </tr>
-           |    </thead>
-           |    <tbody>
-           |      ${apikeys.zipWithIndex.map { tuple =>
-
-                    s"""<tr>
-                       |  <th scope="row">${tuple._2}</th>
-                       |  <td>${tuple._1._2.clientName}</td>
-                       |  <td>${if (tuple._1._2.enabled) "<span class=\"badge rounded-pill text-bg-success\">yes</span>" else "<span class=\"badge rounded-pill text-bg-danger\">no</span>"}</td>
-                       |  <td>${if (tuple._1._2.metadata.get("waiting-approval").contains("true")) "<span class=\"badge rounded-pill text-bg-warning\">waiting approval</span>" else "<span class=\"badge rounded-pill text-bg-success\">approved</span>"}</td>
-                       |  <td>
-                       |    <div class="btn-group">
-                       |      <button class="btn btn-sm btn-outline-success apikey-edit" title="edit apikey"
-                       |        data-client-id="${tuple._1._2.clientId}"
-                       |        data-name="${tuple._1._2.clientName}"
-                       |        data-description="${tuple._1._2.description}"
-                       |        data-bearer="${if (tuple._1._2.metadata.get("waiting-approval").contains("true")) "--" else tuple._1._2.toBearer()}"
-                       |        data-enabled="${tuple._1._2.enabled}"
-                       |        data-plan="${tuple._1._3.id}"
-                       |        data-sub="${tuple._1._1.id}"
-                       |      ><i class="bi bi-pencil-square"></i></button>
-                       |      <button class="btn btn-sm btn-outline-primary apikey-bearer-copy" title="copy bearer"
-                       |        data-bearer="${tuple._1._2.toBearer()}"
-                       |      ><i class="bi bi-copy"></i></button>
-                       |      <button class="btn btn-sm btn-outline-danger apikey-delete" title="delete apikey"
-                       |        data-client-id="${tuple._1._2.clientId}"
-                       |        data-sub="${tuple._1._1.id}"
-                       |        data-plan="${tuple._1._3.id}"
-                       |      ><i class="bi bi-trash"></i></button></div>
-                       |  </td>
-                       |</tr>""".stripMargin
-                  }.mkString("\n")}
-           |    </tbody>
-           |    <script>
-           |      [].slice.call(document.querySelectorAll('[data-bearer]')).map(b => {
-           |        b.addEventListener('click', () => {
-           |          navigator.clipboard.writeText(b.getAttribute('data-bearer'))
-           |        });
-           |      });
-           |      [].slice.call(document.querySelectorAll('.apikey-edit')).map(b => {
-           |        b.addEventListener('click', () => {
-           |          const client_id = b.getAttribute('data-client-id');
-           |          const name = b.getAttribute('data-name');
-           |          const description = b.getAttribute('data-description');
-           |          const bearer = b.getAttribute('data-bearer');
-           |          const enabled = b.getAttribute('data-enabled');
-           |          const plan = b.getAttribute('data-plan');
-           |          const apikey = { client_id, name, description, bearer, enabled, plan };
-           |          openApiKeyEditor({ mode: 'update', apikey });
-           |        });
-           |      });
-           |      [].slice.call(document.querySelectorAll('.apikey-create')).map(b => {
-           |        b.addEventListener('click', () => {
-           |          const plan = b.getAttribute('data-plan');
-           |          openApiKeyEditor({ mode: 'create', plan });
-           |        });
-           |      });
-           |      [].slice.call(document.querySelectorAll('.apikey-delete')).map(b => {
-           |        b.addEventListener('click', () => {
-           |          const client_id = b.getAttribute('data-client-id');
-           |          const sub = b.getAttribute('data-sub');
-           |          const plan = b.getAttribute('data-plan');
-           |          let ok = window.confirm("Are you sure you want to delete this apikey ?");
-           |          if (ok) {
-             |          fetch('${config.prefix.getOrElse("")}/api/apikeys/' + client_id, {
-             |            method: "DELETE",
-             |            credentials: "include",
-             |          }).then(() => {
-             |            setTimeout(() => {
-             |              window.location.reload()
-             |            }, 200);
-           |            });
-           |          }
-           |        });
-           |      });
-           |    </script>
-           |  </table>
+        s"""<div class="space-y-6">
+           |  <section class="flex flex-col gap-5 rounded-[28px] border border-slate-200/80 bg-gradient-to-br from-white to-stone-100 p-7 shadow-sm lg:flex-row lg:items-end lg:justify-between dark:border-white/10 dark:from-slate-900 dark:to-slate-900/70">
+           |    <div>
+           |      <span class="portal-eyebrow">Access</span>
+           |      <h1 class="portal-page-title">Subscriptions</h1>
+           |      <p class="portal-page-subtitle">Manage credentials, approval status and quick access tokens for this API.</p>
+           |    </div>
+           |    <div>
+           |      <button type="button" class="apikey-create inline-flex items-center gap-2 rounded-full bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:-translate-y-0.5 dark:bg-white dark:text-slate-950">
+           |        <i class="bi bi-plus-circle"></i>
+           |        <span>Create API key</span>
+           |      </button>
+           |    </div>
+           |  </section>
+           |
+           |  <section class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+           |    <article class="portal-shell-card p-5">
+           |      <span class="text-sm text-slate-500 dark:text-slate-400">Published plans</span>
+           |      <strong class="mt-3 block text-3xl font-semibold tracking-tight text-slate-950 dark:text-white">${publishedPlans.size}</strong>
+           |    </article>
+           |    <article class="portal-shell-card p-5">
+           |      <span class="text-sm text-slate-500 dark:text-slate-400">API keys</span>
+           |      <strong class="mt-3 block text-3xl font-semibold tracking-tight text-slate-950 dark:text-white">${apikeys.size}</strong>
+           |    </article>
+           |    <article class="portal-shell-card p-5">
+           |      <span class="text-sm text-slate-500 dark:text-slate-400">Active</span>
+           |      <strong class="mt-3 block text-3xl font-semibold tracking-tight text-slate-950 dark:text-white">${activeCount}</strong>
+           |    </article>
+           |    <article class="portal-shell-card p-5">
+           |      <span class="text-sm text-slate-500 dark:text-slate-400">Waiting approval</span>
+           |      <strong class="mt-3 block text-3xl font-semibold tracking-tight text-slate-950 dark:text-white">${waitingCount}</strong>
+           |    </article>
+           |  </section>
+           |
+           |  <section class="portal-surface">
+           |    <div class="mb-6">
+           |      <div>
+           |        <h2 class="text-xl font-semibold tracking-tight text-slate-950 dark:text-white">Your credentials</h2>
+           |        <p class="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">Use these keys in the API tester or in your own applications.</p>
+           |      </div>
+           |    </div>
+           |    <div class="overflow-auto">
+           |      <table class="min-w-full border-collapse text-left">
+           |        <thead>
+           |          <tr>
+           |            <th class="border-b border-slate-200 px-4 py-3 text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500 dark:border-white/10 dark:text-slate-400">#</th>
+           |            <th class="border-b border-slate-200 px-4 py-3 text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500 dark:border-white/10 dark:text-slate-400">Name</th>
+           |            <th class="border-b border-slate-200 px-4 py-3 text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500 dark:border-white/10 dark:text-slate-400">Plan</th>
+           |            <th class="border-b border-slate-200 px-4 py-3 text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500 dark:border-white/10 dark:text-slate-400">Enabled</th>
+           |            <th class="border-b border-slate-200 px-4 py-3 text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500 dark:border-white/10 dark:text-slate-400">Status</th>
+           |            <th class="border-b border-slate-200 px-4 py-3 text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500 dark:border-white/10 dark:text-slate-400">Actions</th>
+           |          </tr>
+           |        </thead>
+           |        <tbody>
+           |          ${apikeys.zipWithIndex.map { tuple =>
+                        val waiting = tuple._1._2.metadata.get("waiting-approval").contains("true")
+                        val statusPill =
+                          if (waiting) """<span class="portal-pill portal-pill-warning">waiting approval</span>"""
+                          else """<span class="portal-pill portal-pill-success">approved</span>"""
+                        val enabledPill =
+                          if (tuple._1._2.enabled) """<span class="portal-pill portal-pill-success">enabled</span>"""
+                          else """<span class="portal-pill portal-pill-muted">disabled</span>"""
+                        val copyAction =
+                          if (waiting) ""
+                          else s"""<button class="apikey-bearer-copy inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm transition hover:-translate-y-0.5 dark:border-white/10 dark:bg-slate-800 dark:text-slate-200" type="button" title="Copy bearer" data-bearer="${tuple._1._2.toBearer()}"><i class="bi bi-copy"></i><span>Copy</span></button>"""
+                        s"""<tr>
+                           |  <td class="border-b border-slate-200 px-4 py-4 text-sm text-slate-500 dark:border-white/10 dark:text-slate-400">${tuple._2 + 1}</td>
+                           |  <td class="border-b border-slate-200 px-4 py-4 dark:border-white/10">
+                           |    <div class="font-semibold text-slate-950 dark:text-white">${tuple._1._2.clientName}</div>
+                           |    <div class="mt-1 font-mono text-xs text-slate-500 dark:text-slate-400">${tuple._1._2.clientId}</div>
+                           |  </td>
+                           |  <td class="border-b border-slate-200 px-4 py-4 text-sm text-slate-700 dark:border-white/10 dark:text-slate-200">${tuple._1._3.name}</td>
+                           |  <td class="border-b border-slate-200 px-4 py-4 dark:border-white/10">${enabledPill}</td>
+                           |  <td class="border-b border-slate-200 px-4 py-4 dark:border-white/10">${statusPill}</td>
+                           |  <td class="border-b border-slate-200 px-4 py-4 dark:border-white/10">
+                           |    <div class="flex flex-wrap gap-2">
+                           |      <button class="apikey-edit inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm transition hover:-translate-y-0.5 dark:border-white/10 dark:bg-slate-800 dark:text-slate-200" type="button" title="Edit API key"
+                           |        data-client-id="${tuple._1._2.clientId}"
+                           |        data-name="${tuple._1._2.clientName}"
+                           |        data-description="${tuple._1._2.description}"
+                           |        data-bearer="${if (waiting) "--" else tuple._1._2.toBearer()}"
+                           |        data-enabled="${tuple._1._2.enabled}"
+                           |        data-plan="${tuple._1._3.id}"
+                           |        data-sub="${tuple._1._1.id}">
+                           |        <i class="bi bi-pencil-square"></i>
+                           |        <span>Edit</span>
+                           |      </button>
+                           |      ${copyAction}
+                           |      <button class="apikey-delete inline-flex items-center gap-2 rounded-full border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 shadow-sm transition hover:-translate-y-0.5 dark:border-rose-500/20 dark:bg-rose-500/10 dark:text-rose-300" type="button" title="Delete API key"
+                           |        data-client-id="${tuple._1._2.clientId}"
+                           |        data-sub="${tuple._1._1.id}"
+                           |        data-plan="${tuple._1._3.id}">
+                           |        <i class="bi bi-trash"></i>
+                           |        <span>Delete</span>
+                           |      </button>
+                           |    </div>
+                           |  </td>
+                           |</tr>""".stripMargin
+                      }.mkString("\n")}
+           |        </tbody>
+           |      </table>
+           |    </div>
+           |  </section>
            |</div>
            |""".stripMargin)).as("text/html").vfuture
     }
@@ -814,6 +1344,8 @@ object OtoroshiApiPortal {
   def renderResourceAsIcon(resource: Option[ApiDocumentationResource], doc: ApiDocumentation, style: Option[String] = None): String = {
     resource match {
       case Some(resource) if resource.css_icon_class.isDefined => s"""<i class="${resource.css_icon_class.get}"></i> """
+      case Some(resource) if resource.text_content.exists(_.startsWith("bi ")) => s"""<i class="${resource.text_content.get}"></i> """
+      case Some(resource) if resource.text_content.isDefined => s"""<span class="portal-icon-text">${resource.text_content.get}</span> """
       case Some(resource) if resource.resolveUrl(doc).isDefined => s"""<img src="${resource.resolveUrl(doc).get}" style="${resource.raw.select("style").asOptString.orElse(style).getOrElse("")}" /> """
       case Some(resource) if resource.base64_content.isDefined => s"""<img src="data:${resource.contentType};base64,${resource.base64_content.get}" style="${resource.raw.select("style").asOptString.orElse(style).getOrElse("")}" /> """
       case _ => ""
@@ -824,7 +1356,121 @@ object OtoroshiApiPortal {
     def handleTransform(byteString: ByteString): ByteString = {
       // TODO: handle EL
       if (resource.transform.contains("markdown")) {
-        val content = s"""<zero-md><script type="text/markdown">${byteString.utf8String}</script></zero-md>""".stripMargin
+        val content =
+          s"""<zero-md class="portal-markdown">
+             |  <template>
+             |    <style>
+             |      :host {
+             |        display: block;
+             |        color: #0f172a;
+             |      }
+             |
+             |      .markdown-body {
+             |        background: transparent !important;
+             |        color: #334155 !important;
+             |        font-family: "Manrope", ui-sans-serif, system-ui, sans-serif !important;
+             |        line-height: 1.75 !important;
+             |      }
+             |
+             |      .markdown-body h1,
+             |      .markdown-body h2,
+             |      .markdown-body h3,
+             |      .markdown-body h4,
+             |      .markdown-body h5,
+             |      .markdown-body h6 {
+             |        color: #020617 !important;
+             |        letter-spacing: -0.03em;
+             |        border-bottom-color: rgba(148, 163, 184, 0.22) !important;
+             |      }
+             |
+             |      .markdown-body a {
+             |        color: #0284c7 !important;
+             |      }
+             |
+             |      .markdown-body p,
+             |      .markdown-body li,
+             |      .markdown-body blockquote {
+             |        color: #475569 !important;
+             |      }
+             |
+             |      .markdown-body pre {
+             |        background: #020617 !important;
+             |        color: #e2e8f0 !important;
+             |        border-radius: 1rem !important;
+             |        padding: 1rem !important;
+             |      }
+             |
+             |      .markdown-body code {
+             |        font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, monospace !important;
+             |      }
+             |
+             |      .markdown-body :not(pre) > code {
+             |        background: rgba(148, 163, 184, 0.14) !important;
+             |        color: #0f172a !important;
+             |        border-radius: 0.5rem !important;
+             |        padding: 0.15rem 0.4rem !important;
+             |      }
+             |
+             |      .markdown-body table th,
+             |      .markdown-body table td {
+             |        border-color: rgba(148, 163, 184, 0.22) !important;
+             |      }
+             |
+             |      .markdown-body blockquote {
+             |        border-left-color: rgba(14, 165, 233, 0.35) !important;
+             |      }
+             |
+             |      :host-context(.dark) {
+             |        color: #f8fafc;
+             |      }
+             |
+             |      :host-context(.dark) .markdown-body {
+             |        background: transparent !important;
+             |        color: #cbd5e1 !important;
+             |      }
+             |
+             |      :host-context(.dark) .markdown-body h1,
+             |      :host-context(.dark) .markdown-body h2,
+             |      :host-context(.dark) .markdown-body h3,
+             |      :host-context(.dark) .markdown-body h4,
+             |      :host-context(.dark) .markdown-body h5,
+             |      :host-context(.dark) .markdown-body h6 {
+             |        color: #f8fafc !important;
+             |        border-bottom-color: rgba(255, 255, 255, 0.08) !important;
+             |      }
+             |
+             |      :host-context(.dark) .markdown-body p,
+             |      :host-context(.dark) .markdown-body li,
+             |      :host-context(.dark) .markdown-body blockquote {
+             |        color: #cbd5e1 !important;
+             |      }
+             |
+             |      :host-context(.dark) .markdown-body a {
+             |        color: #38bdf8 !important;
+             |      }
+             |
+             |      :host-context(.dark) .markdown-body pre {
+             |        background: #020617 !important;
+             |        color: #e2e8f0 !important;
+             |      }
+             |
+             |      :host-context(.dark) .markdown-body :not(pre) > code {
+             |        background: rgba(255, 255, 255, 0.08) !important;
+             |        color: #f8fafc !important;
+             |      }
+             |
+             |      :host-context(.dark) .markdown-body table th,
+             |      :host-context(.dark) .markdown-body table td {
+             |        border-color: rgba(255, 255, 255, 0.08) !important;
+             |      }
+             |
+             |      :host-context(.dark) .markdown-body blockquote {
+             |        border-left-color: rgba(56, 189, 248, 0.35) !important;
+             |      }
+             |    </style>
+             |  </template>
+             |  <script type="text/markdown">${byteString.utf8String}</script>
+             |</zero-md>""".stripMargin
         resource.transform_wrapper match {
           case None => ByteString(content)
           case Some(wrapper) => ByteString(wrapper.replace("{content}", content))
@@ -867,46 +1513,81 @@ object OtoroshiApiPortal {
   }
 
   def documentationPageTemplate(title: String, prefix: String, api: Api, doc: ApiDocumentation, sidebar: ApiDocumentationSidebar, ctx: NgbBackendCallContext, noInnerPadding: Boolean = false)(content: String)(implicit  env: Env, ec: ExecutionContext, mat: Materializer) = {
-    val sidebarHtml = s"""<aside class="col-lg-2" style="width: 20%;">
-           |  <div class="sidebar pe-lg-3">
-           |    <div class="" style="margin-top: 1.5rem;"></div>
-           |    <div class="mb-3 d-lg-none">
-           |      <button class="btn btn-outline-secondary w-100" data-bs-toggle="collapse" data-bs-target="#docSidebar">
-           |        Menu
-           |      </button>
-           |    </div>
-           |    <nav id="docSidebar" class="collapse d-lg-block">
-           |      <div class="nav flex-column gap-2">
-           |        ${sidebarTemplate(sidebar, prefix, doc, ctx)}
-           |      </div>
-           |    </nav>
-           |  </div>
-           |</aside>""".stripMargin
-    baseTemplate(title, prefix, api, doc, ctx)(
-      s"""<div style="width: 100%; display: flex; flex-direction: row; justify-content: center;">
-         |  <div class="container-xxl" style="display: flex; flex-direction: row;">
-         |    ${sidebarHtml}
-         |    <div style="width:100%; ${if (noInnerPadding) "" else "padding:1.5rem;"}">
-         |      ${content}
+    val sidebarId = "portalDocSidebar"
+    val sidebarHtml =
+      s"""<aside class="xl:sticky xl:top-28 xl:self-start">
+         |  <div class="rounded-3xl border border-slate-200/80 bg-white/80 p-5 shadow-sm backdrop-blur dark:border-white/10 dark:bg-slate-900/70">
+         |    <div class="mb-4 flex items-center justify-between gap-3">
+         |      <div>
+         |        <p class="text-[11px] font-bold uppercase tracking-[0.18em] text-sky-600 dark:text-sky-400">Browse</p>
+         |        <h2 class="mt-2 text-base font-semibold tracking-tight text-slate-950 dark:text-white">${sidebar.label}</h2>
+         |      </div>
+         |      <button class="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm xl:hidden dark:border-white/10 dark:bg-slate-800 dark:text-slate-200" type="button" data-portal-toggle="${sidebarId}">
+         |        <i class="bi bi-list"></i>
+         |        <span>Sections</span>
+         |      </button>
          |    </div>
+         |    <nav id="${sidebarId}" class="hidden space-y-3 xl:block">
+         |      ${sidebarTemplate(sidebar, prefix, doc, ctx)}
+         |    </nav>
          |  </div>
-         |</div>
+         |</aside>""".stripMargin
+    val railHtml =
+      s"""<aside class="xl:sticky xl:top-28 xl:self-start">
+         |  <div class="rounded-3xl border border-slate-200/80 bg-white/80 p-5 shadow-sm backdrop-blur dark:border-white/10 dark:bg-slate-900/70">
+         |    <p class="text-[11px] font-bold uppercase tracking-[0.18em] text-sky-600 dark:text-sky-400">Quick links</p>
+         |    <h2 class="mt-2 text-base font-semibold tracking-tight text-slate-950 dark:text-white">Keep moving</h2>
+         |    <p class="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-400">Jump between guides, reference material and self-service access without losing context.</p>
+         |    <div class="mt-5 space-y-3">
+         |      <a class="inline-flex w-full items-center justify-center gap-2 rounded-full bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:-translate-y-0.5 dark:bg-white dark:text-slate-950" href="${prefix}/api-references">API reference</a>
+         |      ${if (ctx.user.isDefined && doc.plans.exists(_.accessModeConfiguration.map(_.apiKind).getOrElse(ApiKind.Keyless) != ApiKind.Keyless)) {
+              s"""<a class="inline-flex w-full items-center justify-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:-translate-y-0.5 dark:border-white/10 dark:bg-slate-800 dark:text-slate-200" href="${prefix}/subscriptions">Subscriptions</a>"""
+            } else ""}
+         |    </div>
+         |    <dl class="mt-6 grid grid-cols-3 gap-3">
+         |      <div class="rounded-2xl bg-stone-100/80 px-3 py-3 dark:bg-white/5">
+         |        <dt class="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">Specs</dt>
+         |        <dd class="mt-2 text-lg font-semibold text-slate-950 dark:text-white">${doc.references.size}</dd>
+         |      </div>
+         |      <div class="rounded-2xl bg-stone-100/80 px-3 py-3 dark:bg-white/5">
+         |        <dt class="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">Plans</dt>
+         |        <dd class="mt-2 text-lg font-semibold text-slate-950 dark:text-white">${doc.plans.count(_.status == ApiPlanStatus.Published)}</dd>
+         |      </div>
+         |    </dl>
+         |  </div>
+         |</aside>""".stripMargin
+    baseTemplate(title, prefix, api, doc, ctx)(
+      s"""<section class="pb-14 pt-8 lg:pt-10">
+         |  <div class="container-xxl grid gap-6 xl:grid-cols-[260px_minmax(0,1fr)_260px]">
+         |    ${sidebarHtml}
+         |    <article class="min-w-0 overflow-hidden rounded-[28px] border border-slate-200/80 bg-white/85 shadow-sm backdrop-blur dark:border-white/10 dark:bg-slate-900/75">
+         |      <div class="${if (noInnerPadding) "" else "px-6 py-6 sm:px-8 sm:py-8 "}prose prose-slate max-w-none dark:prose-invert prose-headings:tracking-tight prose-headings:text-slate-950 dark:prose-headings:text-white prose-p:text-slate-600 dark:prose-p:text-slate-300 prose-a:text-sky-600 dark:prose-a:text-sky-400 prose-code:text-slate-900 dark:prose-code:text-slate-100 prose-pre:bg-slate-950 prose-pre:text-slate-50">
+         |        ${content}
+         |      </div>
+         |    </article>
+         |    <div class="hidden xl:block">${railHtml}</div>
+         |  </div>
+         |</section>
          |""".stripMargin)
   }
 
   def sidebarCategoryTemplate(item: ApiDocumentationSidebarCategory, prefix: String, index: Int, doc: ApiDocumentation, ctx: NgbBackendCallContext): String = {
-    s"""<div class="nav-section sidebar-section">
-       |  <button class="btn btn-toggle w-100 text-start" data-bs-toggle="collapse" data-bs-target="#section-${index}">
-       |    <i class="bi bi-chevron-right"></i> ${renderResourceAsIcon(item.icon, doc)}${item.label}
-       |  </button>
-       |  <div id="section-${index}" class="collapse show ps-3 mt-2">
+    s"""<details class="group rounded-2xl border border-slate-200/80 bg-stone-50/70 p-1 dark:border-white/10 dark:bg-white/5" open>
+       |  <summary class="flex cursor-pointer list-none items-center justify-between gap-3 rounded-xl px-3 py-3 text-sm font-semibold text-slate-900 dark:text-slate-100">
+       |    <span class="inline-flex items-center gap-2">${renderResourceAsIcon(item.icon, doc)}${item.label}</span>
+       |    <i class="bi bi-chevron-right"></i>
+       |  </summary>
+       |  <div class="space-y-1 px-2 pb-2 pt-1">
        |    ${item.links.map(l => sidebarLinkTemplate(l, prefix, doc, ctx)).mkString("\n")}
        |  </div>
-       |</div>""".stripMargin
+       |</details>""".stripMargin
   }
 
   def sidebarLinkTemplate(item: ApiDocumentationSidebarLink, prefix: String, doc: ApiDocumentation, ctx: NgbBackendCallContext): String = {
-    s"""<a class="nav-link ${if(ctx.request.path == s"${prefix}${item.link}") "active" else ""}" style="font-weight: ${if(ctx.request.path == s"${prefix}${item.link}") "600" else "normal"}" href="${prefix}${item.link}">${renderResourceAsIcon(item.icon, doc)}${item.label}</a>""".stripMargin
+    s"""<a class="flex min-h-[40px] items-center gap-2 rounded-xl px-3 py-2 text-sm ${if(ctx.request.path == s"${prefix}${item.link}") "bg-white font-semibold text-slate-950 shadow-sm dark:bg-slate-800 dark:text-white" else "text-slate-600 transition hover:bg-white hover:text-slate-950 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"}" href="${prefix}${item.link}">
+       |  <span class="inline-flex items-center justify-center text-slate-400 dark:text-slate-500">${renderResourceAsIcon(item.icon, doc)}</span>
+       |  <span>${item.label}</span>
+       |</a>""".stripMargin
   }
 
   def sidebarTemplate(sidebar: ApiDocumentationSidebar, prefix: String, doc: ApiDocumentation, ctx: NgbBackendCallContext): String = {
@@ -919,836 +1600,386 @@ object OtoroshiApiPortal {
   def navPathActive(paths: Seq[String], ctx: NgbBackendCallContext, prefix: String): String = {
     val path = ctx.request.path.replaceFirst(prefix, "").toLowerCase()
     if (paths.exists(p => path.startsWith(p))) {
-      "active fw-medium"
+      "bg-white text-slate-950 shadow-sm ring-1 ring-slate-200 dark:bg-slate-800 dark:text-white dark:ring-white/10"
     } else {
-      ""
+      "text-slate-500 hover:bg-white/80 hover:text-slate-950 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
     }
   }
 
   def apikeyModalComponent(): String = {
     s"""
-       |<!-- API Key Editor Modal -->
-       |<div class="modal fade" id="apiKeyEditorModal" tabindex="-1" aria-hidden="true">
-       |  <div class="modal-dialog modal-lg modal-dialog-scrollable">
-       |    <div class="modal-content">
-       |      <div class="modal-header">
-       |        <div class="w-100">
-       |          <div class="d-flex align-items-center gap-2">
-       |            <h5 class="modal-title" id="apiKeyEditorTitle">Create Apikey</h5>
-       |            <span class="badge bg-secondary d-none" id="apiKeyEditorModeBadge">update</span>
+       |<div class="portal-modal fixed inset-0 z-[120] hidden items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm" id="apiKeyEditorModal" aria-hidden="true">
+       |  <div class="w-full max-w-3xl">
+       |    <div class="overflow-hidden rounded-[28px] border border-slate-200/80 bg-white shadow-2xl dark:border-white/10 dark:bg-slate-900">
+       |      <div class="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-5 dark:border-white/10">
+       |        <div>
+       |          <p class="text-[11px] font-bold uppercase tracking-[0.18em] text-sky-600 dark:text-sky-400">Credentials</p>
+       |          <div class="mt-2 flex flex-wrap items-center gap-3">
+       |            <h2 id="apiKeyEditorTitle" class="text-xl font-semibold tracking-tight text-slate-950 dark:text-white">Create API key</h2>
+       |            <span class="inline-flex items-center rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:bg-white/10 dark:text-slate-300" id="apiKeyEditorModeBadge" hidden>update</span>
        |          </div>
        |        </div>
-       |        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+       |        <button type="button" class="inline-flex h-10 w-10 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 shadow-sm transition hover:text-slate-950 dark:border-white/10 dark:bg-slate-800 dark:text-slate-300 dark:hover:text-white" data-modal-close="apiKeyEditorModal" aria-label="Close">
+       |          <i class="bi bi-x-lg"></i>
+       |        </button>
        |      </div>
-       |
-       |      <div class="modal-body">
-       |        <form id="apiKeyEditorForm" class="needs-validation" novalidate>
-       |          <!-- Shown only in update -->
-       |          <div id="apiKeyEditorClientIdRow" class="mb-3 d-none">
-       |            <label class="form-label">Client ID</label>
-       |            <input type="text" class="form-control" id="apiKeyEditorClientId" readonly>
+       |      <div class="max-h-[calc(100vh-14rem)] overflow-auto px-6 py-6">
+       |        <form id="apiKeyEditorForm" class="space-y-5">
+       |          <div id="apiKeyEditorClientIdRow" class="space-y-2" hidden>
+       |            <label for="apiKeyEditorClientId" class="text-sm font-medium text-slate-700 dark:text-slate-200">Client ID</label>
+       |            <input type="text" class="w-full rounded-2xl border border-slate-200 bg-stone-50 px-4 py-3 font-mono text-sm text-slate-900 outline-none dark:border-white/10 dark:bg-slate-800 dark:text-slate-100" id="apiKeyEditorClientId" readonly />
        |          </div>
        |
-       |          <div class="mb-3">
-       |            <label class="form-label">Name <span class="text-danger">*</span></label>
-       |            <input type="text" class="form-control" id="apiKeyEditorName" required>
-       |            <div class="invalid-feedback">Name is required</div>
+       |          <div class="space-y-2">
+       |            <label for="apiKeyEditorName" class="text-sm font-medium text-slate-700 dark:text-slate-200">Name</label>
+       |            <input type="text" class="w-full rounded-2xl border border-slate-200 bg-stone-50 px-4 py-3 text-slate-900 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100 dark:border-white/10 dark:bg-slate-800 dark:text-slate-100 dark:focus:ring-sky-500/20" id="apiKeyEditorName" data-autofocus />
        |          </div>
        |
-       |          <div class="mb-3">
-       |            <label class="form-label">Description</label>
-       |            <textarea id="apiKeyEditorDesc" class="form-control" rows="3" spellcheck="false"></textarea>
+       |          <div class="space-y-2">
+       |            <label for="apiKeyEditorDesc" class="text-sm font-medium text-slate-700 dark:text-slate-200">Description</label>
+       |            <textarea id="apiKeyEditorDesc" class="min-h-[128px] w-full rounded-2xl border border-slate-200 bg-stone-50 px-4 py-3 text-slate-900 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100 dark:border-white/10 dark:bg-slate-800 dark:text-slate-100 dark:focus:ring-sky-500/20" rows="4" spellcheck="false"></textarea>
        |          </div>
        |
-       |          <div class="form-check form-switch mb-3">
-       |            <input class="form-check-input" type="checkbox" id="apiKeyEditorEnabled">
-       |            <label class="form-check-label" for="apiKeyEditorEnabled">Enabled</label>
-       |          </div>
+       |          <label class="inline-flex items-center gap-3 text-sm font-medium text-slate-700 dark:text-slate-200">
+       |            <input type="checkbox" id="apiKeyEditorEnabled" class="h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-500" />
+       |            <span>Enabled</span>
+       |          </label>
        |
-       |          <!-- Create-only: plan select -->
-       |          <div id="apiKeyEditorPlanRow" class="mb-3">
-       |            <label class="form-label">Plan <span class="text-danger">*</span></label>
-       |            <select id="apiKeyEditorPlan" class="form-select" required>
-       |              <option value="">— choose a plan —</option>
+       |          <div id="apiKeyEditorPlanRow" class="space-y-2">
+       |            <label for="apiKeyEditorPlan" class="text-sm font-medium text-slate-700 dark:text-slate-200">Plan</label>
+       |            <select id="apiKeyEditorPlan" class="w-full rounded-2xl border border-slate-200 bg-stone-50 px-4 py-3 text-slate-900 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100 dark:border-white/10 dark:bg-slate-800 dark:text-slate-100 dark:focus:ring-sky-500/20">
+       |              <option value="">Choose a plan</option>
        |            </select>
-       |            <div class="form-text" id="apiKeyEditorPlanHelp"></div>
-       |            <div class="invalid-feedback">Plan is required</div>
-       |          </div>
-       |          <!-- Update-only: plan display -->
-       |          <div id="apiKeyEditorPlanDisplay" class="mb-3">
-       |            <label class="form-label">Plan</label>
-       |            <input type="text" class="form-control" id="apiKeyEditorDisplay" readonly>
-       |            <div class="form-text" id="apiKeyEditorPlanHelp2"></div>
+       |            <p class="text-sm text-slate-500 dark:text-slate-400" id="apiKeyEditorPlanHelp"></p>
        |          </div>
        |
-       |          <!-- Update-only: bearer with show/hide + copy -->
-       |          <div id="apiKeyEditorBearerRow" class="mb-1 d-none">
-       |            <label class="form-label">Bearer</label>
-       |            <div class="input-group">
-       |              <input type="password" class="form-control font-monospace" id="apiKeyEditorBearer" readonly>
-       |              <button class="btn btn-outline-secondary" type="button" id="apiKeyEditorToggleBearer" aria-label="Display/Hide">👁️</button>
-       |              <button class="btn btn-outline-secondary" type="button" id="apiKeyEditorCopyBearer" aria-label="Copy">📋</button>
+       |          <div id="apiKeyEditorPlanDisplay" class="space-y-2" hidden>
+       |            <label for="apiKeyEditorDisplay" class="text-sm font-medium text-slate-700 dark:text-slate-200">Plan</label>
+       |            <input type="text" class="w-full rounded-2xl border border-slate-200 bg-stone-50 px-4 py-3 text-slate-900 outline-none dark:border-white/10 dark:bg-slate-800 dark:text-slate-100" id="apiKeyEditorDisplay" readonly />
+       |            <p class="text-sm text-slate-500 dark:text-slate-400" id="apiKeyEditorPlanHelp2"></p>
+       |          </div>
+       |
+       |          <div id="apiKeyEditorBearerRow" class="space-y-2" hidden>
+       |            <label for="apiKeyEditorBearer" class="text-sm font-medium text-slate-700 dark:text-slate-200">Bearer</label>
+       |            <div class="flex flex-wrap gap-2 sm:flex-nowrap">
+       |              <input type="password" class="min-w-0 flex-1 rounded-2xl border border-slate-200 bg-stone-50 px-4 py-3 font-mono text-sm text-slate-900 outline-none dark:border-white/10 dark:bg-slate-800 dark:text-slate-100" id="apiKeyEditorBearer" readonly />
+       |              <button class="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:-translate-y-0.5 dark:border-white/10 dark:bg-slate-800 dark:text-slate-200" type="button" id="apiKeyEditorToggleBearer">Show</button>
+       |              <button class="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:-translate-y-0.5 dark:border-white/10 dark:bg-slate-800 dark:text-slate-200" type="button" id="apiKeyEditorCopyBearer">Copy</button>
        |            </div>
        |          </div>
        |        </form>
        |      </div>
-       |
-       |      <div class="modal-footer">
-       |        <div class="me-auto small" id="apiKeyEditorMsg"></div>
-       |        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-       |        <button type="button" class="btn btn-primary" id="apiKeyEditorSubmitBtn">Save</button>
+       |      <div class="flex items-center justify-between gap-4 border-t border-slate-200 px-6 py-5 dark:border-white/10">
+       |        <div class="min-h-[20px] text-sm text-slate-500 dark:text-slate-400" id="apiKeyEditorMsg"></div>
+       |        <div class="flex items-center gap-3">
+       |          <button type="button" class="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:-translate-y-0.5 dark:border-white/10 dark:bg-slate-800 dark:text-slate-200" data-modal-close="apiKeyEditorModal">Cancel</button>
+       |          <button type="button" class="inline-flex items-center justify-center rounded-full bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:-translate-y-0.5 dark:bg-white dark:text-slate-950" id="apiKeyEditorSubmitBtn">Save</button>
+       |        </div>
        |      </div>
        |    </div>
        |  </div>
        |</div>
-       |
-       |<script>
-       |(() => {
-       |  const modalEl   = document.getElementById('apiKeyEditorModal');
-       |  let modalInst   = null;
-       |
-       |  // Elements
-       |  const titleEl   = document.getElementById('apiKeyEditorTitle');
-       |  const modeBadge = document.getElementById('apiKeyEditorModeBadge');
-       |  const msgEl     = document.getElementById('apiKeyEditorMsg');
-       |
-       |  const formEl    = document.getElementById('apiKeyEditorForm');
-       |  const nameEl    = document.getElementById('apiKeyEditorName');
-       |  const descEl    = document.getElementById('apiKeyEditorDesc');
-       |  const enabledEl = document.getElementById('apiKeyEditorEnabled');
-       |  const planRow   = document.getElementById('apiKeyEditorPlanRow');
-       |  const planDisplay   = document.getElementById('apiKeyEditorPlanDisplay');
-       |  const planInput   = document.getElementById('apiKeyEditorDisplay');
-       |  const planSel   = document.getElementById('apiKeyEditorPlan');
-       |  const planHelp  = document.getElementById('apiKeyEditorPlanHelp');
-       |  const planHelp2  = document.getElementById('apiKeyEditorPlanHelp2');
-       |
-       |  const cidRow    = document.getElementById('apiKeyEditorClientIdRow');
-       |  const cidEl     = document.getElementById('apiKeyEditorClientId');
-       |
-       |  const bearerRow = document.getElementById('apiKeyEditorBearerRow');
-       |  const bearerEl  = document.getElementById('apiKeyEditorBearer');
-       |  const btnShow   = document.getElementById('apiKeyEditorToggleBearer');
-       |  const btnCopy   = document.getElementById('apiKeyEditorCopyBearer');
-       |  const btnSave   = document.getElementById('apiKeyEditorSubmitBtn');
-       |
-       |  // Utilities
-       |  const setBusy = (busy) => {
-       |    [nameEl, descEl, enabledEl, planSel, btnShow, btnCopy, btnSave].forEach(el => {
-       |      if (el) el.disabled = !!busy;
-       |    });
-       |  };
-       |
-       |  const showMsg = (text, kind = 'muted') => {
-       |    msgEl.className = `me-auto small text-$${kind}`;
-       |    msgEl.textContent = text || '';
-       |  };
-       |
-       |  const resetMsg = () => showMsg('');
-       |
-       |  const updateSecretBanner = () => {
-       |    const danger = false && bearerEl.type === 'text';
-       |    // warnEl.classList.toggle('d-none', !danger);
-       |  };
-       |
-       |  btnShow.addEventListener('click', () => {
-       |    bearerEl.type = bearerEl.type === 'password' ? 'text' : 'password';
-       |    updateSecretBanner();
-       |  });
-       |
-       |  const copyToClipboard = async (text) => {
-       |    try {
-       |      if (navigator.clipboard?.writeText) {
-       |        await navigator.clipboard.writeText(text);
-       |        return true;
-       |      }
-       |      const ta = document.createElement('textarea');
-       |      ta.value = text;
-       |      document.body.appendChild(ta);
-       |      ta.select();
-       |      document.execCommand('copy');
-       |      document.body.removeChild(ta);
-       |      return true;
-       |    } catch { return false; }
-       |  };
-       |
-       |  btnCopy.addEventListener('click', async () => {
-       |    const ok = await copyToClipboard(bearerEl.value || '');
-       |    showMsg(ok ? 'Bearer copied' : 'Impossible to copy.', ok ? 'success' : 'danger');
-       |    setTimeout(resetMsg, 2000);
-       |  });
-       |
-       |  // Load plans (create mode)
-       |  const loadPlans = async () => {
-       |    const mode = modeBadge.textContent || 'create';
-       |    planSel.innerHTML = '<option value="">— choose a plan —</option>';
-       |    planHelp.textContent = '';
-       |    try {
-       |      const res = await fetch('/api/plans', { method: 'GET', credentials: "include" });
-       |      if (!res.ok) throw new Error('GET /api/plans non OK');
-       |      const plans = await res.json(); // [{id, name, description}]
-       |      if (mode === 'create') {
-       |        if (Array.isArray(plans)) {
-       |          plans.forEach(p => {
-       |            const opt = document.createElement('option');
-       |            opt.value = p.id;
-       |            opt.textContent = p.name || p.id;
-       |            opt.dataset.description = p.description || '';
-       |            planSel.appendChild(opt);
-       |          });
-       |          // help text on change
-       |          planSel.addEventListener('change', () => {
-       |            const opt = planSel.options[planSel.selectedIndex];
-       |            planHelp.textContent = opt?.dataset?.description || '';
-       |          }, { once: true });
-       |        }
-       |      } else {
-       |        const plan = plans.find(p => p.id == planInput.value);
-       |        planInput.value = plan.name;
-       |        planHelp2.textContent = plan.description;
-       |      }
-       |    } catch (e) {
-       |      showMsg('Unable to load plans', 'warning');
-       |      console.warn(e);
-       |    }
-       |  };
-       |
-       |  // Submit (create/update)
-       |  btnSave.addEventListener('click', async () => {
-       |    resetMsg();
-       |    formEl.classList.add('was-validated');
-       |    // if (!formEl.checkValidity()) {
-       |    //   showMsg('Please check the form', 'danger');
-       |    //   return;
-       |    // }
-       |
-       |    const mode = modeBadge.textContent || 'create';
-       |    setBusy(true);
-       |
-       |    try {
-       |      if (mode === 'create') {
-       |        const payload = {
-       |          name: nameEl.value.trim(),
-       |          description: descEl.value.trim(),
-       |          enabled: !!enabledEl.checked,
-       |          plan: planSel.value
-       |        };
-       |        const res = await fetch('/api/apikeys', {
-       |          method: 'POST',
-       |          headers: { 'content-type': 'application/json' },
-       |          body: JSON.stringify(payload),
-       |          credentials: "include",
-       |        });
-       |        if (!res.ok) {
-       |          const txt = await res.text().catch(() => '');
-       |          throw new Error(`Create failed (HTTP $${res.status}) $${txt}`);
-       |        }
-       |        const created = await res.json().catch(() => null);
-       |        showMsg('Apikey successfully created', 'success');
-       |        // Event pour que l’app rafraîchisse les listes
-       |        window.dispatchEvent(new CustomEvent('apikey:created', { detail: created || payload }));
-       |        // fermer après un petit délai
-       |        setTimeout(() => {
-       |          bootstrap.Modal.getInstance(modalEl)?.hide();
-       |          window.location.reload();
-     |          }, 700);
-       |      } else {
-       |        const clientId = cidEl.value;
-       |        const payload = {
-       |          name: nameEl.value.trim(),
-       |          description: descEl.value.trim(),
-       |          enabled: !!enabledEl.checked
-       |        };
-       |        const res = await fetch(`/api/apikeys/$${encodeURIComponent(clientId)}`, {
-       |          method: 'PUT',
-       |          headers: { 'content-type': 'application/json' },
-       |          body: JSON.stringify(payload)
-       |        });
-       |        if (!res.ok) {
-       |          const txt = await res.text().catch(() => '');
-       |          throw new Error(`Update failed (HTTP $${res.status}) $${txt}`);
-       |        }
-       |        const updated = await res.json().catch(() => null);
-       |        showMsg('Apikey updated', 'success');
-       |        window.dispatchEvent(new CustomEvent('apikey:updated', { detail: updated || { client_id: clientId, ...payload } }));
-       |        setTimeout(() => {
-       |          bootstrap.Modal.getInstance(modalEl)?.hide();
-       |          window.location.reload();
-     |          }, 700);
-       |      }
-       |    } catch (e) {
-       |      showMsg(e.message || 'Unexpected error', 'danger');
-       |    } finally {
-       |      setBusy(false);
-       |    }
-       |  });
-       |
-       |  // Public API
-       |  // openApiKeyEditor({ mode: 'create' | 'update', apikey?: {client_id,name,description,bearer,enabled} })
-       |  window.openApiKeyEditor = async ({ mode = 'create', apikey = null } = {}) => {
-       |    if (!modalInst) {
-       |      modalInst = new bootstrap.Modal(modalEl, { backdrop: 'static' });
-       |    }
-       |
-       |    // Reset form state
-       |    formEl.reset();
-       |    formEl.classList.remove('was-validated');
-       |    resetMsg();
-       |    // warnEl.classList.add('d-none');
-       |
-       |    // Configure by mode
-       |    if (mode === 'update') {
-       |      btnSave.textContent = 'Save';
-       |      titleEl.textContent = 'Update apikey';
-       |      modeBadge.textContent = 'update';
-       |      modeBadge.classList.remove('d-none');
-       |
-       |      cidRow.classList.remove('d-none');
-       |      bearerRow.classList.remove('d-none');
-       |      planRow.classList.add('d-none');
-       |      planDisplay.classList.remove('d-none');
-       |
-       |      // Fill fields from provided apikey
-       |      const k = apikey || {};
-       |      cidEl.value     = k.client_id || '';
-       |      nameEl.value    = k.name || '';
-       |      descEl.value    = k.description || '';
-       |      enabledEl.checked = !!k.enabled;
-       |      planInput.value = k.plan || '';
-       |      bearerEl.value  = k.bearer || '';
-       |      bearerEl.type   = 'password';
-       |      updateSecretBanner();
-       |      await loadPlans();
-       |    } else {
-       |      btnSave.textContent = 'Create';
-       |      titleEl.textContent = 'Create apikey';
-       |      modeBadge.textContent = 'create';
-       |      modeBadge.classList.add('d-none');
-       |
-       |      cidRow.classList.add('d-none');
-       |      bearerRow.classList.add('d-none');
-       |      planRow.classList.remove('d-none');
-       |      planDisplay.classList.add('d-none');
-       |
-       |
-       |      // Defaults
-       |      enabledEl.checked = true;
-       |
-       |      // Load plans
-       |      await loadPlans();
-       |    }
-       |
-       |    modalInst.show();
-       |  };
-       |})();
-       |</script>
-       |
        |""".stripMargin
   }
 
   def testerComponent(): String = {
     s"""
-       |<!-- API Tester Modal (Bootstrap 5) -->
-       |<div class="modal fade" id="apiTesterModal" tabindex="-1" aria-hidden="true">
-       |  <div class="modal-dialog modal-xl modal-dialog-scrollable">
-       |    <div class="modal-content" style="height: 85vh;">
-       |      <div class="modal-header">
-       |        <div class="w-100">
-       |          <div class="d-flex gap-2 align-items-center mb-2">
-       |            <span class="badge bg-secondary" id="apiTesterMethod">GET</span>
-       |            <input type="text" class="form-control form-control-sm" id="apiTesterUrl" readonly>
+       |<div class="portal-modal fixed inset-0 z-[120] hidden items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm" id="apiTesterModal" aria-hidden="true">
+       |  <div class="w-full max-w-7xl">
+       |    <div class="flex max-h-[calc(100vh-2rem)] flex-col overflow-hidden rounded-[28px] border border-slate-200/80 bg-white shadow-2xl dark:border-white/10 dark:bg-slate-900">
+       |      <div class="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-5 dark:border-white/10">
+       |        <div class="min-w-0">
+       |          <p class="text-[11px] font-bold uppercase tracking-[0.18em] text-sky-600 dark:text-sky-400">Tester</p>
+       |          <div class="mt-2 flex flex-wrap items-center gap-3">
+       |            <span class="inline-flex items-center rounded-full bg-stone-100 px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-slate-600 dark:bg-white/10 dark:text-slate-300" id="apiTesterMethod">GET</span>
+       |            <input type="text" class="min-w-0 flex-1 rounded-2xl border border-slate-200 bg-stone-50 px-4 py-3 font-mono text-sm text-slate-900 outline-none dark:border-white/10 dark:bg-slate-800 dark:text-slate-100" id="apiTesterUrl" readonly />
        |          </div>
-       |          <div id="apiTesterSecretWarn" class="text-warning small d-none">
-       |            ⚠️ oulà, il y a un secret là (vérifie que tu ne leaks rien d’important)
-       |          </div>
+       |          <p class="mt-3 hidden text-sm text-amber-600 dark:text-amber-400" id="apiTesterSecretWarn">Headers or body look sensitive. Double-check before copying or sharing.</p>
        |        </div>
-       |        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+       |        <button type="button" class="inline-flex h-10 w-10 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 shadow-sm transition hover:text-slate-950 dark:border-white/10 dark:bg-slate-800 dark:text-slate-300 dark:hover:text-white" data-modal-close="apiTesterModal" aria-label="Close">
+       |          <i class="bi bi-x-lg"></i>
+       |        </button>
        |      </div>
-       |
-       |      <div class="modal-body p-0">
-       |        <div class="h-100 d-flex" style="min-height: 0;">
-       |          <!-- REQUEST -->
-       |          <div class="col-6 border-end p-3 d-flex flex-column" style="min-width: 0;">
-       |            <div class="d-flex align-items-center gap-2 mb-2">
-       |              <label class="form-label m-0">API key</label>
-       |              <select id="apiTesterApiKeySelect" class="form-select form-select-sm w-auto">
-       |                <option value="">— aucune —</option>
+       |      <div class="min-h-0 flex-1 overflow-auto px-6 py-6">
+       |        <div class="grid gap-5 xl:grid-cols-2">
+       |          <section class="rounded-[24px] border border-slate-200 bg-stone-50/80 p-5 dark:border-white/10 dark:bg-white/5">
+       |            <div class="mb-4 flex items-center justify-between gap-3">
+       |              <h3 class="text-base font-semibold tracking-tight text-slate-950 dark:text-white">Request</h3>
+       |              <button class="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:-translate-y-0.5 dark:border-white/10 dark:bg-slate-800 dark:text-slate-200" id="apiTesterResetHeaders" type="button">Reset headers</button>
+       |            </div>
+       |            <div class="space-y-4">
+       |              <div class="space-y-2">
+       |                <label for="apiTesterApiKeySelect" class="text-sm font-medium text-slate-700 dark:text-slate-200">API key</label>
+       |                <select id="apiTesterApiKeySelect" class="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-slate-900 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100 dark:border-white/10 dark:bg-slate-800 dark:text-slate-100 dark:focus:ring-sky-500/20">
+       |                <option value="">No API key</option>
        |              </select>
-       |              <button class="btn btn-outline-secondary btn-sm ms-auto" id="apiTesterResetHeaders">Reset headers</button>
-       |            </div>
-       |
-       |            <label class="form-label">Request headers (JSON)</label>
-       |            <textarea id="apiTesterHeaders" class="form-control font-monospace" style="height: 25vh;" spellcheck="false" placeholder='{"accept":"application/json"}'></textarea>
-       |
-       |            <div class="d-flex align-items-center gap-2 mt-3 mb-2">
-       |              <label class="form-label m-0">Request body (JSON, optional)</label>
-       |              <span class="text-muted small">(ignored if empty)</span>
-       |            </div>
-       |            <textarea id="apiTesterBody" class="form-control font-monospace" style="height: 25vh;" spellcheck="false" placeholder='{"name":"Alice"}'></textarea>
-       |          </div>
-       |
-       |          <!-- RESPONSE -->
-       |          <div class="col-6 p-3 d-flex flex-column" style="min-width: 0;">
-       |            <div class="d-flex align-items-center gap-3 mb-2">
-       |              <div>
-       |                <span class="text-muted small">Status:</span>
-       |                <span id="apiTesterStatus" class="fw-bold">—</span>
        |              </div>
-       |              <div>
-       |                <span class="text-muted small">Duration:</span>
-       |                <span id="apiTesterDuration" class="fw-bold">—</span>
+       |              <div class="space-y-2">
+       |                <label for="apiTesterHeaders" class="text-sm font-medium text-slate-700 dark:text-slate-200">Request headers (JSON)</label>
+       |                <textarea id="apiTesterHeaders" class="min-h-[220px] w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 font-mono text-sm text-slate-900 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100 dark:border-white/10 dark:bg-slate-800 dark:text-slate-100 dark:focus:ring-sky-500/20" spellcheck="false" placeholder='{"accept":"application/json"}'></textarea>
        |              </div>
-       |              <div class="ms-auto">
-       |                <button class="btn btn-outline-secondary btn-sm" id="apiTesterClearResponse">Clear</button>
+       |              <div class="space-y-2">
+       |                <label for="apiTesterBody" class="text-sm font-medium text-slate-700 dark:text-slate-200">Request body (JSON)</label>
+       |                <textarea id="apiTesterBody" class="min-h-[220px] w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 font-mono text-sm text-slate-900 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100 dark:border-white/10 dark:bg-slate-800 dark:text-slate-100 dark:focus:ring-sky-500/20" spellcheck="false" placeholder='{"name":"Alice"}'></textarea>
        |              </div>
        |            </div>
-       |
-       |            <label class="form-label">Response headers</label>
-       |            <pre id="apiTesterRespHeaders" class="bg-body-tertiary rounded p-2 mb-3" style="height: 18vh; overflow:auto; white-space:pre-wrap;"></pre>
-       |
-       |            <label class="form-label">Response body</label>
-       |            <pre id="apiTesterRespBody" class="bg-body-tertiary rounded p-2" style="height: 37vh; overflow:auto; white-space:pre-wrap;"></pre>
-       |          </div>
+       |          </section>
+       |          <section class="rounded-[24px] border border-slate-200 bg-stone-50/80 p-5 dark:border-white/10 dark:bg-white/5">
+       |            <div class="mb-4 flex items-center justify-between gap-3">
+       |              <h3 class="text-base font-semibold tracking-tight text-slate-950 dark:text-white">Response</h3>
+       |              <button class="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:-translate-y-0.5 dark:border-white/10 dark:bg-slate-800 dark:text-slate-200" id="apiTesterClearResponse" type="button">Clear</button>
+       |            </div>
+       |            <div class="space-y-4">
+       |              <div class="grid gap-3 sm:grid-cols-2">
+       |                <div class="rounded-2xl bg-white px-4 py-4 dark:bg-slate-800">
+       |                  <span class="text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">Status</span>
+       |                  <strong id="apiTesterStatus" class="mt-2 block text-sm font-semibold text-slate-950 dark:text-white">-</strong>
+       |              </div>
+       |                <div class="rounded-2xl bg-white px-4 py-4 dark:bg-slate-800">
+       |                  <span class="text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">Duration</span>
+       |                  <strong id="apiTesterDuration" class="mt-2 block text-sm font-semibold text-slate-950 dark:text-white">-</strong>
+       |                </div>
+       |              </div>
+       |              <div class="space-y-2">
+       |                <label for="apiTesterRespHeaders" class="text-sm font-medium text-slate-700 dark:text-slate-200">Response headers</label>
+       |                <pre id="apiTesterRespHeaders" class="min-h-[180px] overflow-auto rounded-2xl bg-slate-950 px-4 py-4 font-mono text-sm text-slate-100"></pre>
+       |              </div>
+       |              <div class="space-y-2">
+       |                <label for="apiTesterRespBody" class="text-sm font-medium text-slate-700 dark:text-slate-200">Response body</label>
+       |                <pre id="apiTesterRespBody" class="min-h-[280px] overflow-auto rounded-2xl bg-slate-950 px-4 py-4 font-mono text-sm text-slate-100"></pre>
+       |              </div>
+       |            </div>
+       |          </section>
        |        </div>
        |      </div>
-       |
-       |      <div class="modal-footer">
-       |        <div class="me-auto text-danger small" id="apiTesterError"></div>
-       |        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-       |        <button type="button" class="btn btn-primary" id="apiTesterSendBtn">Send</button>
+       |      <div class="flex items-center justify-between gap-4 border-t border-slate-200 px-6 py-5 dark:border-white/10">
+       |        <div class="min-h-[20px] text-sm text-rose-600 dark:text-rose-400" id="apiTesterError"></div>
+       |        <div class="flex items-center gap-3">
+       |          <button type="button" class="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:-translate-y-0.5 dark:border-white/10 dark:bg-slate-800 dark:text-slate-200" data-modal-close="apiTesterModal">Close</button>
+       |          <button type="button" class="inline-flex items-center justify-center rounded-full bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:-translate-y-0.5 dark:bg-white dark:text-slate-950" id="apiTesterSendBtn">Send request</button>
+       |        </div>
        |      </div>
        |    </div>
        |  </div>
        |</div>
-       |
-       |<script>
-       |(() => {
-       |  const modalEl = document.getElementById('apiTesterModal');
-       |  let modalInstance = null;
-       |
-       |  // UI refs
-       |  const methodBadge = document.getElementById('apiTesterMethod');
-       |  const urlInput    = document.getElementById('apiTesterUrl');
-       |
-       |  const secretWarn  = document.getElementById('apiTesterSecretWarn');
-       |
-       |  const selApiKey   = document.getElementById('apiTesterApiKeySelect');
-       |  const taHeaders   = document.getElementById('apiTesterHeaders');
-       |  const taBody      = document.getElementById('apiTesterBody');
-       |
-       |  const statusEl    = document.getElementById('apiTesterStatus');
-       |  const durEl       = document.getElementById('apiTesterDuration');
-       |  const respHEl     = document.getElementById('apiTesterRespHeaders');
-       |  const respBEl     = document.getElementById('apiTesterRespBody');
-       |
-       |  const errEl       = document.getElementById('apiTesterError');
-       |
-       |  const btnSend     = document.getElementById('apiTesterSendBtn');
-       |  const btnResetHdr = document.getElementById('apiTesterResetHeaders');
-       |  const btnClearRes = document.getElementById('apiTesterClearResponse');
-       |
-       |  // Defaults
-       |  const DEFAULT_HEADERS = { "accept": "application/json" };
-       |
-       |  // Helpers
-       |  const pretty = (obj) => {
-       |    try { return JSON.stringify(obj, null, 2); } catch { return String(obj); }
-       |  };
-       |
-       |  const tryParseJSON = (str) => {
-       |    if (!str || !str.trim()) return null;
-       |    try { return JSON.parse(str); } catch (e) { throw new Error("JSON invalide"); }
-       |  };
-       |
-       |  const headersToKV = (headers) => {
-       |    // headers can be a Headers instance or plain object
-       |    if (!headers) return {};
-       |    if (typeof Headers !== "undefined" && headers instanceof Headers) {
-       |      const out = {};
-       |      headers.forEach((v, k) => out[k] = v);
-       |      return out;
-       |    }
-       |    return headers;
-       |  };
-       |
-       |
-       |  const updateSecretBanner = () => {
-       |    const hdrs = taHeaders.value;
-       |    const body = taBody.value;
-       |    const danger = false;
-       |    secretWarn.classList.toggle('d-none', !danger);
-       |  };
-       |
-       |  taHeaders.addEventListener('input', updateSecretBanner);
-       |  taBody.addEventListener('input', updateSecretBanner);
-       |
-       |  // API keys loading
-       |  const loadApiKeys = async () => {
-       |    selApiKey.innerHTML = '<option value="">— none —</option>';
-       |    try {
-       |      const res = await fetch('/api/apikeys', { method: 'GET', credentials: 'include' });
-       |      if (!res.ok) throw new Error('GET /api/apikeys non OK');
-       |      const data = await res.json(); // expecting [{client_id, name, bearer}]
-       |      if (Array.isArray(data)) {
-       |        data.forEach((k, idx) => {
-       |          const opt = document.createElement('option');
-       |          opt.value = idx; // index-based
-       |          opt.textContent = k.name ? `$${k.name} ($${k.client_id || '—'})` : (k.client_id || 'clé');
-       |          opt.dataset.bearer = k.bearer || '';
-       |          selApiKey.appendChild(opt);
-       |        });
-       |      }
-       |    } catch (e) {
-       |      console.warn('Unable to load /api/apikeys', e);
-       |    }
-       |  };
-       |
-       |  // When selecting an API key, inject Authorization header
-       |  selApiKey.addEventListener('change', () => {
-       |    const idx = selApiKey.value;
-       |    if (!idx) return; // cleared
-       |    const opt = selApiKey.options[selApiKey.selectedIndex];
-       |    const bearer = opt?.dataset?.bearer || '';
-       |    let hdrObj;
-       |    try {
-       |      hdrObj = tryParseJSON(taHeaders.value) || {};
-       |    } catch (e) {
-       |      // if invalid JSON, reset to default then apply
-       |      hdrObj = { ...DEFAULT_HEADERS };
-       |    }
-       |    if (bearer) hdrObj['authorization'] = `Bearer $${bearer}`;
-       |    taHeaders.value = pretty(hdrObj);
-       |    updateSecretBanner();
-       |  });
-       |
-       |  btnResetHdr.addEventListener('click', () => {
-       |    taHeaders.value = pretty(DEFAULT_HEADERS);
-       |    updateSecretBanner();
-       |  });
-       |
-       |  btnClearRes.addEventListener('click', () => {
-       |    statusEl.textContent = '—';
-       |    durEl.textContent = '—';
-       |    respHEl.textContent = '';
-       |    respBEl.textContent = '';
-       |    errEl.textContent = '';
-       |  });
-       |
-       |  // SEND handler
-       |  btnSend.addEventListener('click', async () => {
-       |    errEl.textContent = '';
-       |    statusEl.textContent = '…';
-       |    durEl.textContent = '…';
-       |    respHEl.textContent = '';
-       |    respBEl.textContent = '';
-       |
-       |    // parse request pieces
-       |    let headersObj = null;
-       |    let bodyObj = null;
-       |    try {
-       |      headersObj = tryParseJSON(taHeaders.value) || {};
-       |    } catch (e) {
-       |      errEl.textContent = 'Invalid JSON header';
-       |      return;
-       |    }
-       |    try {
-       |      bodyObj = tryParseJSON(taBody.value); // may be null
-       |    } catch (e) {
-       |      errEl.textContent = 'Invalid JSON Body';
-       |      return;
-       |    }
-       |
-       |    const payload = {
-       |      method: methodBadge.textContent,
-       |      url: urlInput.value,
-       |      headers: headersObj,
-       |      body_json: bodyObj
-       |    };
-       |
-       |    const t0 = performance.now();
-       |    let res, data, resHeaders = {};
-       |    try {
-       |      res = await fetch('/api/_test', {
-       |        method: 'POST',
-       |        credentials: 'include',
-       |        headers: { 'content-type': 'application/json' },
-       |        body: JSON.stringify(payload)
-       |      });
-       |      const t1 = performance.now();
-       |      durEl.textContent = `$${Math.round(t1 - t0)} ms`;
-       |      data = await res.json();
-       |      statusEl.textContent = `$${data.status} $${data.statusText || ''}`.trim();
-       |      // response parsing (headers + body)
-       |      resHeaders = data.headers;
-       |      respHEl.textContent = pretty(resHeaders);
-
-       |      const ct = data.headers['content-type'] || data.headers['Content-Type'] || '';
-       |      if (ct.includes('application/json') || ct.includes('json')) {
-       |        respBEl.textContent = pretty(JSON.parse(data.body_str));
-       |      } else {
-       |        respBEl.textContent = data.body_str;
-       |      }
-       |
-       |      if (!res.ok) {
-       |        errEl.textContent = `Request failed (HTTP $${res.status}).`;
-       |      }
-       |    } catch (e) {
-       |      const t1 = performance.now();
-       |      durEl.textContent = `$${Math.round(t1 - t0)} ms`;
-       |      statusEl.textContent = '—';
-       |      errEl.textContent = `Error: $${e.message}`;
-       |    }
-       |  });
-       |
-       |  // Public API
-       |  window.openApiTester = async ({ url, method = 'GET', presetHeaders = null, presetBody = null } = {}) => {
-       |    if (!modalInstance) {
-       |      modalInstance = new bootstrap.Modal(modalEl, { backdrop: 'static' });
-       |    }
-       |    methodBadge.textContent = (method || 'GET').toUpperCase();
-       |    urlInput.value = url || '';
-       |
-       |    if (presetHeaders && typeof presetHeaders === 'object') {
-       |      taHeaders.value = pretty(presetHeaders);
-       |    } else {
-       |      taHeaders.value = pretty(DEFAULT_HEADERS);
-       |    }
-       |    taBody.value = presetBody ? pretty(presetBody) : '';
-       |
-       |    // clear response zone
-       |    statusEl.textContent = '—';
-       |    durEl.textContent = '—';
-       |    respHEl.textContent = '';
-       |    respBEl.textContent = '';
-       |    errEl.textContent = '';
-       |
-       |    updateSecretBanner();
-       |
-       |    // load API keys (best-effort)
-       |    await loadApiKeys();
-       |
-       |    modalInstance.show();
-       |  };
-       |})();
-       |</script>
-       |
        |""".stripMargin
   }
 
   def baseTemplate(title: String, prefix: String, api: Api, doc: ApiDocumentation, ctx: NgbBackendCallContext)(content: String): String = {
+    val userInitial = ctx.user
+      .flatMap(u => u.name.trim.headOption.orElse(u.email.trim.headOption))
+      .map(_.toUpper)
+      .getOrElse('U')
+    val identityMenu =
+      if (ctx.user.isDefined) {
+        s"""<details class="relative">
+           |  <summary class="flex list-none items-center gap-3 rounded-full border border-slate-200 bg-white px-2 py-1.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:-translate-y-0.5 dark:border-white/10 dark:bg-slate-900 dark:text-slate-200">
+           |    <span class="inline-flex h-8 w-8 items-center justify-center rounded-full bg-sky-50 text-xs font-extrabold text-sky-700 dark:bg-sky-500/15 dark:text-sky-300">${userInitial}</span>
+           |    <span class="hidden sm:inline">${ctx.user.get.name}</span>
+           |    <i class="bi bi-chevron-down"></i>
+           |  </summary>
+           |  <div class="absolute right-0 top-[calc(100%+0.75rem)] z-50 min-w-[240px] rounded-3xl border border-slate-200 bg-white p-4 shadow-glow dark:border-white/10 dark:bg-slate-900">
+           |    <div class="mb-3 border-b border-slate-200 pb-3 dark:border-white/10">
+           |      <strong>${ctx.user.get.name}</strong>
+           |      <span class="mt-1 block text-sm text-slate-500 dark:text-slate-400">${ctx.user.get.email}</span>
+           |    </div>
+           |    <a class="text-sm font-semibold text-slate-900 dark:text-white" href="${prefix}/logout">Logout</a>
+           |  </div>
+           |</details>""".stripMargin
+      } else {
+        s"""<a class="inline-flex items-center justify-center rounded-full bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:-translate-y-0.5 dark:bg-white dark:text-slate-950" href="${prefix}/login?redirect=${prefix}/">Login</a>"""
+      }
+    val navigationTabs =
+      doc.navigation
+        .map(nav => s"""<a class="inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium transition ${navPathActive(nav.path, ctx, prefix)}" href="${prefix}${nav.path.headOption.getOrElse("#")}">${renderResourceAsIcon(nav.icon, doc, Some("max-height: 18px;"))}<span>${nav.label}</span></a>""")
+        .mkString("\n")
+    val subscriptionsTab =
+      if (ctx.user.isDefined && doc.plans.exists(_.accessModeConfiguration.map(_.apiKind).getOrElse(ApiKind.Keyless) != ApiKind.Keyless)) {
+        s"""<a class="inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium transition ${navPathActive(Seq("/subscriptions"), ctx, prefix)}" href="${prefix}/subscriptions"><i class="bi bi-key"></i><span>Subscriptions</span></a>"""
+      } else {
+        ""
+      }
     s"""
        |<!doctype html>
-       |<html lang="en" data-bs-theme="light">
+       |<html lang="en">
        |  <head>
        |    <meta charset="utf-8" />
        |    <meta name="viewport" content="width=device-width, initial-scale=1" />
        |    <title>${title}</title>
        |    <link rel="icon" href="${prefix}${doc.logo.path.headOption.getOrElse("#")}">
-       |    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB" crossorigin="anonymous">
+       |    <link rel="preconnect" href="https://fonts.googleapis.com">
+       |    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+       |    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+       |    <script src="https://cdn.tailwindcss.com?plugins=forms,typography"></script>
+       |    <script>
+       |      tailwind.config = {
+       |        darkMode: 'class',
+       |        theme: {
+       |          extend: {
+       |            fontFamily: {
+       |              sans: ['Manrope', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+       |              mono: ['IBM Plex Mono', 'ui-monospace', 'SFMono-Regular', 'monospace']
+       |            },
+       |            boxShadow: {
+       |              soft: '0 12px 40px rgba(15, 23, 42, 0.08)',
+       |              glow: '0 20px 60px rgba(15, 23, 42, 0.14)'
+       |            },
+       |            colors: {
+       |              portal: {
+       |                sand: '#f7f4ee',
+       |                ink: '#0f172a'
+       |              }
+       |            }
+       |          }
+       |        }
+       |      };
+       |    </script>
        |    <link  href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet" type="text/css" />
-       |    <style>
-       |      .sidebar .nav-link {
-       |        color: inherit !important;
-       |        text-decoration: none !important;
+       |    <style type="text/tailwindcss">
+       |      @layer base {
+       |        body {
+       |          @apply min-h-screen bg-stone-50 font-sans text-slate-900 antialiased dark:bg-[#0b1020] dark:text-slate-100;
+       |          background-image:
+       |            radial-gradient(circle at top left, rgba(56, 189, 248, 0.10), transparent 28%),
+       |            radial-gradient(circle at top right, rgba(245, 158, 11, 0.08), transparent 24%);
+       |        }
+       |        a {
+       |          @apply no-underline;
+       |        }
+       |        summary::-webkit-details-marker {
+       |          display: none;
+       |        }
        |      }
-       |      .sidebar .nav-link:visited,
-       |      .sidebar .nav-link:hover,
-       |      .sidebar .nav-link:active,
-       |      .sidebar .nav-link:focus {
-       |        color: inherit;
-       |        text-decoration: none;
+       |      @layer components {
+       |        .container-xxl {
+       |          @apply mx-auto w-[min(1440px,calc(100vw-2rem))] px-0;
+       |        }
+       |        .portal-shell-card {
+       |          @apply rounded-[28px] border border-slate-200/80 bg-white/80 shadow-soft backdrop-blur dark:border-white/10 dark:bg-slate-900/70;
+       |        }
+       |        .portal-surface {
+       |          @apply portal-shell-card p-6 sm:p-7;
+       |        }
+       |        .portal-page-title {
+       |          @apply mt-3 text-4xl font-semibold tracking-tight text-slate-950 sm:text-5xl dark:text-white;
+       |        }
+       |        .portal-page-subtitle {
+       |          @apply mt-3 max-w-3xl text-base leading-7 text-slate-600 dark:text-slate-300;
+       |        }
+       |        .portal-eyebrow {
+       |          @apply inline-flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.18em] text-sky-600 dark:text-sky-400;
+       |        }
+       |        .portal-pill {
+       |          @apply inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold;
+       |        }
+       |        .portal-pill-success {
+       |          @apply portal-pill bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300;
+       |        }
+       |        .portal-pill-warning {
+       |          @apply portal-pill bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-300;
+       |        }
+       |        .portal-pill-muted {
+       |          @apply portal-pill bg-slate-100 text-slate-600 dark:bg-white/10 dark:text-slate-300;
+       |        }
+       |        .portal-feedback {
+       |          @apply min-h-[20px] text-sm;
+       |        }
+       |        .portal-feedback-muted {
+       |          @apply text-slate-500 dark:text-slate-400;
+       |        }
+       |        .portal-feedback-success {
+       |          @apply text-emerald-600 dark:text-emerald-400;
+       |        }
+       |        .portal-feedback-warning {
+       |          @apply text-amber-600 dark:text-amber-400;
+       |        }
+       |        .portal-feedback-danger {
+       |          @apply text-rose-600 dark:text-rose-400;
+       |        }
+       |        .portal-redoc-action {
+       |          @apply inline-flex items-center justify-center rounded-full bg-slate-950 px-3 py-1.5 text-xs font-semibold text-white shadow-sm dark:bg-white dark:text-slate-950;
+       |        }
        |      }
-       |      .sidebar .nav-link .active {
-       |        font-weight: 600 !important;
+       |      redoc {
+       |        display: block;
        |      }
-       |
-       |      .api-references-container a {
-       |        color: inherit !important;
-       |        text-decoration: none !important;
+       |      .portal-redoc-shell > div,
+       |      .portal-redoc-shell redoc {
+       |        min-height: 70vh;
        |      }
-       |
-       |      .api-references-container a:visited,
-       |      .api-references-container a:hover,
-       |      .api-references-container a:active,
-       |      .api-references-container a:focus {
-       |        color: inherit;
-       |        text-decoration: none;
+       |      .portal-rich-content .container-xxl {
+       |        width: 100%;
+       |        max-width: 100%;
        |      }
-       |      .sidebar-section button {
-       |        border-width: 1px;
-       |        border-color: var(--bs-secondary-color);
-       |      }
-       |    </style>
-       |
-       |    <style>
-       |      /* Hero */
-       |      .hero-badge {
-       |        background: #f2d14b;
-       |        border-radius: .75rem;
-       |        font-weight: 800;
-       |        display: inline-block;
-       |        padding: .1rem .5rem;
-       |        line-height: 1.2;
-       |      }
-       |      .hero-title {
-       |        letter-spacing: -0.02em;
-       |        font-weight: 800;
-       |      }
-       |      .hero-subtle {
-       |        color: var(--bs-secondary-color);
-       |      }
-       |      /* Right card image placeholder keeps ratio */
-       |      .illustration-card {
-       |        background: #f2d14b;
+       |      .portal-rich-content img {
        |        border-radius: 1rem;
-       |        box-shadow: var(--bs-box-shadow-lg);
        |      }
-       |      .illustration-card .inner {
-       |        min-height: 440px;
-       |        background:
-       |          radial-gradient(120px 120px at 75% 55%, rgba(255,255,255,.25), transparent 60%),
-       |          radial-gradient(120px 120px at 35% 65%, rgba(0,0,0,.05), transparent 60%);
-       |        display:flex;align-items:center;justify-content:center;
-       |        font-size: clamp(1.25rem, 2vw, 2rem);
-       |        font-weight: 800;
+       |      .portal-rich-content table {
+       |        width: 100%;
+       |        border-collapse: collapse;
        |      }
-       |      /* Footer subtle links */
-       |      .footer-links a { color: var(--bs-secondary-color); text-decoration: none; }
-       |      .footer-links a:hover { text-decoration: underline; }
-       |      /* Make navbar sticky and add subtle border */
-       |      .navbar.is-sticky { position: sticky; top: 0; z-index: 1030; border-bottom: 1px solid var(--bs-border-color); background: var(--bs-body-bg); }
-       |      /* Search input look like your screenshot */
-       |      .nav-search { max-width: 360px; }
-       |      .navbar.is-sticky { position: sticky; top: 0; z-index: 1030; border-bottom: 1px solid var(--bs-border-color); background: var(--bs-body-bg); }
-       |      .sidebar {
-       |        position: sticky;
-       |        top: 4.25rem; /* below navbar */
-       |        height: calc(100vh - 4rem);
-       |        max-height: calc(100dvh - 4rem);
-       |        overflow-y: auto;
-       |        border-right: 1px solid var(--bs-border-color);
+       |      .portal-rich-content table th,
+       |      .portal-rich-content table td {
+       |        border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+       |        padding: 0.85rem;
+       |        text-align: left;
        |      }
-       |      @media (max-width: 991.98px) {
-       |        .sidebar { position: static; max-height: none; border-right: 0; }
+       |      .portal-rich-content .card {
+       |        border: 1px solid rgba(148, 163, 184, 0.2);
+       |        border-radius: 1.5rem;
+       |        background: rgba(255,255,255,0.75);
        |      }
-       |      .toc {
-       |        position: sticky;
-       |        top: 4.25rem;
-       |        max-height: calc(100dvh - 5rem);
-       |        overflow-y: auto;
-       |      }
-       |      .doc-hero {
-       |        background: #f2d14b;
-       |        border-radius: 1rem;
-       |        height: 220px;
-       |        display:flex;align-items:center;justify-content:center;
-       |        font-weight: 800;
-       |        font-size: clamp(1.2rem, 2vw, 1.75rem);
-       |        margin-bottom: 1.5rem;
-       |      }
-       |      .small-muted { color: var(--bs-secondary-color); }
-       |      .footer-links a { color: var(--bs-secondary-color); text-decoration: none; }
-       |      .footer-links a:hover { text-decoration: underline; }
-       |      .nav-section .btn-toggle { font-weight: 600; }
-       |      .nav-section .btn-toggle::after { content: '\f285'; font-family: bootstrap-icons; transition:.2s; margin-left: .25rem; }
-       |      .nav-section .btn-toggle[aria-expanded="true"]::after { transform: rotate(90deg); }
-       |      .toc a { text-decoration: none; }
-       |      .sidebar .nav-link {
-       |        color: black !important;
-       |        text-decoration: none !important;
-       |      }
-       |      .sidebar .nav-link:visited,
-       |      .sidebar .nav-link:hover,
-       |      .sidebar .nav-link:active,
-       |      .sidebar .nav-link:focus {
-       |        color: black;
-       |        text-decoration: none;
+       |      .dark .portal-rich-content .card {
+       |        background: rgba(15, 23, 42, 0.72);
+       |        border-color: rgba(255,255,255,0.08);
        |      }
        |    </style>
        |  </head>
-       |  <body data-barba="wrapper">
-       |    <main data-barba="container" data-barba-namespace="main">
-       |    <!-- Top nav -->
-       |    <nav class="navbar is-sticky navbar-expand-lg" style="height: 120px; flex-direction: column;">
-       |      <div class="container-xxl">
-       |        <a class="navbar-brand fw-bold" href="${prefix}/">
-       |          ${renderResourceAsIcon(doc.logo.some, doc, Some("max-height: 45px;"))}${api.name}
-       |        </a>
-       |        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#mainNav">
-       |          <span class="navbar-toggler-icon"></span>
-       |        </button>
-       |        <div class="collapse navbar-collapse" id="mainNav">
-       |          <form class="d-none d-lg-flex ms-auto me-3 nav-search" role="search">
-       |            <div class="input-group">
-       |              <span class="input-group-text bg-transparent border-end-0"><i class="bi bi-search"></i></span>
-       |              <input type="search" class="form-control border-start-0" style="border-bottom-right-radius: 6px; border-top-right-radius: 6px;" placeholder="Search" aria-label="Search" />
+       |  <body data-portal-prefix="${prefix}">
+       |    <div class="relative isolate">
+       |      <header class="sticky top-0 z-50 border-b border-slate-200/70 bg-stone-50/85 backdrop-blur-xl dark:border-white/10 dark:bg-[#0b1020]/80">
+       |        <div class="container-xxl flex flex-col gap-4 py-4 lg:py-5">
+       |          <div class="flex items-center justify-between gap-4">
+       |            <a class="inline-flex min-w-0 items-center gap-3" href="${prefix}/">
+       |              <span class="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-white/10 dark:bg-slate-900">
+       |                ${renderResourceAsIcon(doc.logo.some, doc, Some("max-height: 26px;"))}
+       |              </span>
+       |              <span class="truncate text-base font-extrabold tracking-tight text-slate-950 dark:text-white">${api.name}</span>
+       |            </a>
+       |
+       |            <div class="flex items-center gap-3">
+       |              <label class="hidden min-w-[18rem] items-center gap-3 rounded-full border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-500 shadow-sm lg:flex dark:border-white/10 dark:bg-slate-900 dark:text-slate-400">
+       |                <i class="bi bi-search"></i>
+       |                <input type="search" placeholder="Search docs" class="w-full border-0 bg-transparent p-0 text-slate-900 outline-none ring-0 placeholder:text-slate-400 focus:ring-0 dark:text-slate-100 dark:placeholder:text-slate-500" />
+       |              </label>
+       |              <label class="inline-flex items-center gap-3 rounded-full border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-600 shadow-sm dark:border-white/10 dark:bg-slate-900 dark:text-slate-300">
+       |                <i class="bi bi-circle-half"></i>
+       |                <select id="themeSelect" class="border-0 bg-transparent p-0 pr-7 text-sm font-medium text-slate-700 outline-none ring-0 focus:ring-0 dark:text-slate-200">
+       |                  <option value="system">System</option>
+       |                  <option value="light">Light</option>
+       |                  <option value="dark">Dark</option>
+       |                </select>
+       |              </label>
+       |              ${identityMenu}
        |            </div>
-       |          </form>
-       |          <div class="d-flex align-items-center gap-2">
-       |            <button id="themeToggle" class="btn btn-outline-secondary" type="button" aria-label="Toggle theme">
-       |              <i class="bi bi-sun"></i>
-       |            </button>
-       |            ${if(ctx.user.isDefined) {
-                      s"""<div class="dropdown" style="z-index: 9999;">
-                         |   <button class="btn btn-outline-secondary dropdown-toggle" type="button" id="identity-button" data-bs-toggle="dropdown">
-                         |     <i class="bi bi-person-badge"></i>
-                         |   </button>
-                         |   <div class="dropdown-menu" style="z-index: 9999;">
-                         |     <a class="dropdown-item disabled" aria-disabled="true" href="#" tabindex="-1">${ctx.user.get.name}</a>
-                         |     <a class="dropdown-item disabled" aria-disabled="true" href="#" tabindex="-1">${ctx.user.get.email}</a>
-                         |     <a class="dropdown-item" href="${prefix}/logout">Logout</a>
-                         |   </div>
-                         |</div>
-                         |""".stripMargin
-                    } else {
-                      s"""<a class="btn btn-outline-primary" href="${prefix}/login?redirect=${prefix}/">Login</a>"""
-                    }}
        |          </div>
+       |
+       |          <nav class="flex gap-2 overflow-x-auto pb-1" aria-label="Primary">
+       |            ${navigationTabs}
+       |            <a class="inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium transition ${navPathActive(Seq("/api-references"), ctx, prefix)}" href="${prefix}/api-references"><i class="bi bi-braces"></i><span>API reference</span></a>
+       |            ${subscriptionsTab}
+       |          </nav>
        |        </div>
-       |      </div>
-       |      <div style="width: 100vw; border-top: 1px solid var(--bs-border-color); height: 5px;"></div>
-       |      <div class="container-xxl" style="">
-       |        <ul class="navbar-nav me-3">
-       |          ${doc.navigation.map(nav => s"""<li class="nav-item"><a class="nav-link ${navPathActive(nav.path, ctx, prefix)}" href="${prefix}${nav.path.headOption.getOrElse("#")}">${renderResourceAsIcon(nav.icon, doc, Some("max-height: 35px"))}${nav.label}</a></li>""").mkString("\n")}
-       |          <li class="nav-item"><a class="nav-link ${navPathActive(Seq("/api-references"), ctx, prefix)}" href="${prefix}/api-references">API Reference</a></li>
-       |          ${if (ctx.user.isDefined && api.plans.exists(_.accessModeConfiguration.map(_.apiKind).getOrElse(ApiKind.Keyless) != ApiKind.Keyless)) {
-                    s"""<li class="nav-item"><a class="nav-link ${navPathActive(Seq("/subscriptions"), ctx, prefix)}" href="${prefix}/subscriptions">Subscriptions</a></li>"""
-                  } else ""}
-       |          <!--li class="nav-item"><a class="nav-link ${navPathActive(Seq("/tester"), ctx, prefix)}" href="${prefix}/tester">Tester</a></li-->
-       |        </ul>
-       |      </div>
-       |    </nav>
-       |    ${content}
-       |    </main>
+       |      </header>
+       |
+       |      <main>
+       |        ${content}
+       |      </main>
+       |    </div>
        |    ${apikeyModalComponent()}
        |    ${testerComponent()}
-       |    <!-- JS -->
-       |    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js" integrity="sha384-FKyoEForCGlyvwx9Hj09JcYn3nv7wiPVlz7YYwJrWVcXK/BmnVDxM+D2scQbITxI" crossorigin="anonymous"></script>
        |    <script src="https://cdn.redoc.ly/redoc/v2.5.1/bundles/redoc.standalone.js"></script>
        |    <script type="text/javascript" src="${prefix}/portal.js"></script>
-       |    <script>
-       |      // Theme toggle with persistence
-       |      (function() {
-       |        const key = 'portal-theme';
-       |        const root = document.documentElement;
-       |        const btn  = document.getElementById('themeToggle');
-       |        function setIcon(theme) {
-       |          btn.innerHTML = theme === 'dark'
-       |            ? '<i class="bi bi-moon-stars"></i>'
-       |            : '<i class="bi bi-sun"></i>';
-       |        }
-       |        function apply(theme) {
-       |          root.setAttribute('data-bs-theme', theme);
-       |          localStorage.setItem(key, theme);
-       |          setIcon(theme);
-       |        }
-       |        const preferred = localStorage.getItem(key) || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
-       |        apply(preferred);
-       |        btn.addEventListener('click', () => {
-       |          apply(root.getAttribute('data-bs-theme') === 'dark' ? 'light' : 'dark');
-       |        });
-       |      })();
-       |    </script>
        |    <script type="module" src="https://cdn.jsdelivr.net/npm/zero-md@3?register"></script>
        |  </body>
        |</html>
