@@ -319,14 +319,23 @@ object OtoroshiApiPortal {
                    |    <p class="portal-page-subtitle">Read operations, inspect examples and launch the built-in tester directly from the reference.</p>
                    |  </section>
                    |  <div class="portal-redoc-shell overflow-hidden rounded-[28px] border border-slate-200/80 bg-white shadow-sm dark:border-white/10 dark:bg-slate-950">
-                   |    <redoc
+                   |    <!--redoc
                    |       spec-url="${config.prefix.getOrElse("")}${ref.link}"
                    |       hideHostname="false"
                    |       sanitize="true"
-                   |       showObjectSchemaExamples="true"></redoc>
+                   |       showObjectSchemaExamples="true"></redoc-->
+                   |     <div id="scalar-doc"></div>
                    |  </div>
                    |  <script>
                    |    var interval = null;
+                   |    Scalar.createApiReference('#scalar-doc', {
+                   |      // The URL of the OpenAPI/Swagger document
+                   |      url: '${config.prefix.getOrElse("")}${ref.link}',
+                   |      hideDarkModeToggle: true,
+                   |      forceDarkModeState: localStorage.getItem('portal-theme-mode') === 'dark' ? 'dark' :  (localStorage.getItem('portal-theme-mode') === 'system' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : 'light'),
+                   |      // Avoid CORS issues
+                   |      //proxyUrl: 'https://proxy.scalar.com',
+                   |    })
                    |    interval = setInterval(function() {
                    |      var menu = document.querySelector('redoc .menu-content');
                    |      if (menu) {
@@ -335,7 +344,7 @@ object OtoroshiApiPortal {
                    |          var button = document.createElement('button');
                    |          button.type = 'button';
                    |          button.className = 'portal-redoc-action';
-                   |          button.innerHTML = '<span>Try it</span>';
+                   |          button.innerHTML = '<span>Test Request</span>';
                    |          button.addEventListener('click', function() {
                    |            var verb = node.childNodes[1].childNodes[0].childNodes[0].getAttribute('type').toUpperCase();
                    |            var url = node.childNodes[1].childNodes[1].childNodes[0].childNodes[1].childNodes[0].textContent;
@@ -369,12 +378,21 @@ object OtoroshiApiPortal {
            |      <p class="portal-page-subtitle">Inspect request shapes, read examples and launch the tester from any operation.</p>
            |    </section>
            |    <div class="portal-redoc-shell overflow-hidden rounded-[28px] border border-slate-200/80 bg-white shadow-sm dark:border-white/10 dark:bg-slate-950">
-           |      <redoc
+           |      <!--redoc
            |         spec-url="${config.prefix.getOrElse("")}${doc.references.headOption.map(_.link).getOrElse("/openapi.json")}"
            |         hideHostname="false"
            |         showObjectSchemaExamples="true"
-           |      ></redoc>
+           |      ></redoc-->
+           |      <div id="scalar-doc"></div>
            |      <script>
+           |      Scalar.createApiReference('#scalar-doc', {
+           |        // The URL of the OpenAPI/Swagger document
+           |        url: '${config.prefix.getOrElse("")}${doc.references.headOption.map(_.link).getOrElse("/openapi.json")}',
+           |        hideDarkModeToggle: true,
+           |        forceDarkModeState: localStorage.getItem('portal-theme-mode') === 'dark' ? 'dark' :  (localStorage.getItem('portal-theme-mode') === 'system' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : 'light'),
+           |        // Avoid CORS issues
+           |        //proxyUrl: 'https://proxy.scalar.com',
+           |      })
            |        var interval = null;
            |        interval = setInterval(function() {
            |          var menu = document.querySelector('redoc .menu-content');
@@ -384,7 +402,7 @@ object OtoroshiApiPortal {
            |              var button = document.createElement('button');
            |              button.type = 'button';
            |              button.className = 'portal-redoc-action';
-           |              button.innerHTML = '<span>Try it</span>';
+           |              button.innerHTML = '<span>Test Request</span>';
            |              button.addEventListener('click', function() {
            |                var verb = node.childNodes[1].childNodes[0].childNodes[0].getAttribute('type').toUpperCase();
            |                var url = node.childNodes[1].childNodes[1].childNodes[0].childNodes[1].childNodes[0].textContent;
@@ -417,6 +435,7 @@ object OtoroshiApiPortal {
          |  const root = document.documentElement;
          |  const body = document.body;
          |  const prefix = body.dataset.portalPrefix || '';
+         |  let lastMode = localStorage.getItem('portal-theme-mode');
          |
          |  const byId = (id) => document.getElementById(id);
          |  const prefixPath = (path) => prefix + path;
@@ -456,11 +475,16 @@ object OtoroshiApiPortal {
          |  const applyThemeMode = (mode) => {
          |    const resolvedTheme = resolveTheme(mode);
          |    root.classList.toggle('dark', resolvedTheme === 'dark');
+         |    const old = root.dataset.themeMode;
          |    root.dataset.themeMode = mode;
          |    localStorage.setItem('portal-theme-mode', mode);
          |    const select = byId('themeSelect');
          |    if (select) {
          |      select.value = mode;
+         |    }
+         |    if (lastMode !== mode) {
+         |      lastMode = mode;
+         |      window.location.reload();
          |    }
          |  };
          |
@@ -1809,8 +1833,9 @@ object OtoroshiApiPortal {
        |    <link rel="icon" href="${prefix}${doc.logo.path.headOption.getOrElse("#")}">
        |    <link rel="preconnect" href="https://fonts.googleapis.com">
        |    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+       |    <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
        |    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
-       |    <script src="https://cdn.tailwindcss.com?plugins=forms,typography"></script>
+       |    <script src="https://cdn.tailwindcss.com?plugins=forms,typography"></script>       |
        |    <script>
        |      tailwind.config = {
        |        darkMode: 'class',
@@ -1932,6 +1957,9 @@ object OtoroshiApiPortal {
        |      .dark .portal-rich-content .card {
        |        background: rgba(15, 23, 42, 0.72);
        |        border-color: rgba(255,255,255,0.08);
+       |      }
+       |      .portal-redoc-action {
+       |        margin-bottom: 10px;
        |      }
        |    </style>
        |  </head>
