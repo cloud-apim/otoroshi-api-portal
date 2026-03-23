@@ -55,9 +55,13 @@ object ApiDocumentationExample {
       "id" -> "dev",
       "name" -> "Dev",
       "description" -> "An apikey to try the API on prototypes",
-      "throttling_quota" -> 100,
-      "daily_quota" -> 1000,
-      "monthly_quota" -> 1000,
+      "access_mode_configuration_type" -> "apikey",
+      "access_mode_configuration" -> Json.obj(
+        "throttling_quota" -> 100,
+        "daily_quota" -> 1000,
+        "monthly_quota" -> 1000,
+      ),
+      "status" -> "published",
       "tags" -> Json.arr(),
       "metadata" -> Json.obj(
         "env" -> "dev"
@@ -212,9 +216,13 @@ object ApiDocumentationExample {
       "id" -> "dev",
       "name" -> "Dev",
       "description" -> "An apikey to try the API on prototypes",
-      "throttling_quota" -> 100,
-      "daily_quota" -> 1000,
-      "monthly_quota" -> 1000,
+      "access_mode_configuration_type" -> "apikey",
+      "access_mode_configuration" -> Json.obj(
+        "throttling_quota" -> 100,
+        "daily_quota" -> 1000,
+        "monthly_quota" -> 1000,
+      ),
+      "status" -> "published",
       "tags" -> Json.arr(),
       "metadata" -> Json.obj(
         "env" -> "dev"
