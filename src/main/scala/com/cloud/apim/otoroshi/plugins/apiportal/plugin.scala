@@ -7,7 +7,7 @@ import next.models._
 import org.joda.time.DateTime
 import otoroshi.cluster.ClusterAgent
 import otoroshi.env.Env
-import otoroshi.models.{ApiIdentifier, ApiKey}
+import otoroshi.models.{ApiIdentifier, ApiKey, RemainingQuotas}
 import otoroshi.next.plugins.api._
 import otoroshi.next.proxy.NgProxyEngineError
 import otoroshi.security.IdGenerator
@@ -42,7 +42,6 @@ import scala.util._
  *   - Page apikeys
  *
  */
-
 
 case class OtoroshiApiPortalConfig(prefix: Option[String], apiRef: Option[String]) extends NgPluginConfig {
   def json: JsValue = OtoroshiApiPortalConfig.format.writes(this)
@@ -164,12 +163,11 @@ class OtoroshiApiPortal extends NgBackendCall {
 }
 
 object OtoroshiApiPortal {
-  def apikeysFromApiForUser(consumer: ApiConsumer, ctx: NgbBackendCallContext)(implicit  env: Env, ec: ExecutionContext, mat: Materializer): Future[Seq[(ApiConsumerSubscription, ApiKey)]] = {
-    Source(consumer.subscriptions.toList)
-      .mapAsync(1)(ref => env.datastores.apiConsumerSubscriptionDataStore.findById(ref.ref))
-      .flatMapConcat(refOpt => Source(refOpt.toList))
+  def apikeysFromApiForUser(plan: ApiDocumentationPlan, ctx: NgbBackendCallContext)(implicit  env: Env, ec: ExecutionContext, mat: Materializer): Future[Seq[(ApiSubscription, ApiKey)]] = {
+    Source(env.proxyState.allApiSubscriptions().toList)
+      .filter(_.planRef == plan.id)
       .filter(_.enabled)
-      .filter(_.subscriptionKind == ApiConsumerKind.Apikey)
+      .filter(_.subscriptionKind == ApiKind.Apikey)
       .filter(c => ctx.user.map(_.email).contains(c.ownerRef))
       .flatMapConcat(sub => if (sub.tokenRefs.isEmpty) Source.single((sub, "--")) else Source(sub.tokenRefs.map(r => (sub, r)).toList))
       .mapAsync(1) {
@@ -186,7 +184,7 @@ object OtoroshiApiPortal {
           tags = Seq.empty,
           metadata = Map(
             "waiting-approval" -> "true",
-            "otoroshi-api-plan-ref" -> sub.metadata.get("otoroshi-api-plan-ref").getOrElse("--"),
+            "otoroshi-api-plan-ref" -> sub.metadata.getOrElse("otoroshi-api-plan-ref", "--"),
           ),
           location = sub.location,
         ).some).vfuture
@@ -420,174 +418,146 @@ object OtoroshiApiPortal {
     )).vfuture
   }
   def serveApikeysPage(api: Api, doc: ApiDocumentation, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(implicit  env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
-    api.consumers.find(c => c.status == ApiConsumerStatus.Published) match {
-      case None => Results.Ok(baseTemplate(s"${api.name} - Subscriptions", config.prefix.getOrElse(""), api, doc, ctx)("")).as("text/html").vfuture
-      case Some(consumer) => apikeysFromApiForUser(consumer, ctx).flatMap { apikeys =>
-        val sidebar = ApiDocumentationSidebar(Json.obj(
-          "items" -> Json.arr(Json.obj(
-            "label" -> "My apikeys",
-            "link" -> s"${config.prefix.getOrElse("")}/subscriptions/apikeys",
-            "icon" -> Json.obj("text_content" -> "bi bi-key")
-          ))
+    Source(api.plans.filter(c => c.status == ApiPlanStatus.Published).toList).mapAsync(1) { plan =>
+      apikeysFromApiForUser(plan, ctx).map(_.map(t => (t._1, t._2, plan)))
+    }
+    .flatMapConcat(seq => Source(seq.toList))
+    .runWith(Sink.seq)
+    .flatMap { apikeys =>
+      val sidebar = ApiDocumentationSidebar(Json.obj(
+        "items" -> Json.arr(Json.obj(
+          "label" -> "My apikeys",
+          "link" -> s"${config.prefix.getOrElse("")}/subscriptions/apikeys",
+          "icon" -> Json.obj("text_content" -> "bi bi-key")
         ))
-        Results.Ok(documentationPageTemplate(s"${api.name} - Subscriptions", config.prefix.getOrElse(""), api, doc, sidebar, ctx)(
-          s"""<div>
-             |  <div style="width: 100%; display: flex; flex-direction: row; justify-content: flex-end;">
-             |    <button type="button" class="btn btn-sm btn-outline-primary apikey-create" data-consumer="${consumer.id}"><span class="bi bi-plus-circle" /> apikey</button>
-             |  </div>
-             |  <table class="table">
-             |    <thead>
-             |      <tr>
-             |        <th scope="col">#</th>
-             |        <th scope="col">Name</th>
-             |        <th scope="col">Enabled</th>
-             |        <th scope="col">Status</th>
-             |        <th scope="col">Actions</th>
-             |      </tr>
-             |    </thead>
-             |    <tbody>
-             |      ${apikeys.zipWithIndex.map { tuple =>
+      ))
+      Results.Ok(documentationPageTemplate(s"${api.name} - Subscriptions", config.prefix.getOrElse(""), api, doc, sidebar, ctx)(
+        s"""<div>
+           |  <div style="width: 100%; display: flex; flex-direction: row; justify-content: flex-end;">
+           |    <button type="button" class="btn btn-sm btn-outline-primary apikey-create"><span class="bi bi-plus-circle" /> apikey</button>
+           |  </div>
+           |  <table class="table">
+           |    <thead>
+           |      <tr>
+           |        <th scope="col">#</th>
+           |        <th scope="col">Name</th>
+           |        <th scope="col">Enabled</th>
+           |        <th scope="col">Status</th>
+           |        <th scope="col">Actions</th>
+           |      </tr>
+           |    </thead>
+           |    <tbody>
+           |      ${apikeys.zipWithIndex.map { tuple =>
 
-                      s"""<tr>
-                         |  <th scope="row">${tuple._2}</th>
-                         |  <td>${tuple._1._2.clientName}</td>
-                         |  <td>${if (tuple._1._2.enabled) "<span class=\"badge rounded-pill text-bg-success\">yes</span>" else "<span class=\"badge rounded-pill text-bg-danger\">no</span>"}</td>
-                         |  <td>${if (tuple._1._2.metadata.get("waiting-approval").contains("true")) "<span class=\"badge rounded-pill text-bg-warning\">waiting approval</span>" else "<span class=\"badge rounded-pill text-bg-success\">approved</span>"}</td>
-                         |  <td>
-                         |    <div class="btn-group">
-                         |      <button class="btn btn-sm btn-outline-success apikey-edit" title="edit apikey"
-                         |        data-client-id="${tuple._1._2.clientId}"
-                         |        data-name="${tuple._1._2.clientName}"
-                         |        data-description="${tuple._1._2.description}"
-                         |        data-bearer="${if (tuple._1._2.metadata.get("waiting-approval").contains("true")) "--" else tuple._1._2.toBearer()}"
-                         |        data-enabled="${tuple._1._2.enabled}"
-                         |        data-plan="${tuple._1._2.metadata.get("otoroshi-api-plan-ref").get}"
-                         |        data-sub="${tuple._1._1.id}"
-                         |        data-consumer="${consumer.id}"
-                         |      ><i class="bi bi-pencil-square"></i></button>
-                         |      <button class="btn btn-sm btn-outline-primary apikey-bearer-copy" title="copy bearer"
-                         |        data-bearer="${tuple._1._2.toBearer()}"
-                         |      ><i class="bi bi-copy"></i></button>
-                         |      <button class="btn btn-sm btn-outline-danger apikey-delete" title="delete apikey"
-                         |        data-client-id="${tuple._1._2.clientId}"
-                         |        data-sub="${tuple._1._1.id}"
-                         |        data-consumer="${consumer.id}"
-                         |      ><i class="bi bi-trash"></i></button></div>
-                         |  </td>
-                         |</tr>""".stripMargin
-                    }.mkString("\n")}
-             |    </tbody>
-             |    <script>
-             |      [].slice.call(document.querySelectorAll('[data-bearer]')).map(b => {
-             |        b.addEventListener('click', () => {
-             |          navigator.clipboard.writeText(b.getAttribute('data-bearer'))
-             |        });
-             |      });
-             |      [].slice.call(document.querySelectorAll('.apikey-edit')).map(b => {
-             |        b.addEventListener('click', () => {
-             |          const client_id = b.getAttribute('data-client-id');
-             |          const name = b.getAttribute('data-name');
-             |          const description = b.getAttribute('data-description');
-             |          const bearer = b.getAttribute('data-bearer');
-             |          const enabled = b.getAttribute('data-enabled');
-             |          const plan = b.getAttribute('data-plan');
-             |          const apikey = { client_id, name, description, bearer, enabled, plan };
-             |          openApiKeyEditor({ mode: 'update', apikey });
-             |          // const sub = b.getAttribute('data-sub');
-             |          // const consumer = b.getAttribute('data-consumer');
-             |          // let name = prompt("Apikey name ?");
-             |          // fetch('${config.prefix.getOrElse("")}/api/apikeys/' + client_id, {
-             |          //   method: "PUT",
-             |          //   credentials: "include",
-             |          //   headers: {
-             |          //     "Content-Type": "application/json",
-             |          //   },
-             |          //   body: JSON.stringify({
-             |          //     sub, consumer, name
-             |          //   })
-             |          // }).then(() => {
-             |          //   setTimeout(() => {
-             |          //     window.location.reload()
-             |          //   }, 200);
-           |            // });
-             |        });
-             |      });
-             |      [].slice.call(document.querySelectorAll('.apikey-create')).map(b => {
-             |        b.addEventListener('click', () => {
-             |          const consumer = b.getAttribute('data-consumer');
-             |          openApiKeyEditor({ mode: 'create', consumer });
-             |          // let name = prompt("Apikey name ?");
-             |          // fetch('${config.prefix.getOrElse("")}/api/apikeys', {
-             |          //   method: "POST",
-             |          //   credentials: "include",
-             |          //   headers: {
-             |          //     "Content-Type": "application/json",
-             |          //   },
-             |          //   body: JSON.stringify({
-             |          //     consumer, name
-             |          //   })
-             |          // }).then(() => {
-             |          //   setTimeout(() => {
-             |          //     window.location.reload()
-             |          //   }, 200);
-           |            // });
-             |        });
-             |      });
-             |      [].slice.call(document.querySelectorAll('.apikey-delete')).map(b => {
-             |        b.addEventListener('click', () => {
-             |          const client_id = b.getAttribute('data-client-id');
-             |          const sub = b.getAttribute('data-sub');
-             |          const consumer = b.getAttribute('data-consumer');
-             |          let ok = window.confirm("Are you sure you want to delete this apikey ?");
-             |          if (ok) {
-               |          fetch('${config.prefix.getOrElse("")}/api/apikeys/' + client_id, {
-               |            method: "DELETE",
-               |            credentials: "include",
-               |          }).then(() => {
-               |            setTimeout(() => {
-               |              window.location.reload()
-               |            }, 200);
-             |            });
-             |          }
-             |        });
-             |      });
-             |    </script>
-             |  </table>
-             |</div>
-             |""".stripMargin)).as("text/html").vfuture
-      }
+                    s"""<tr>
+                       |  <th scope="row">${tuple._2}</th>
+                       |  <td>${tuple._1._2.clientName}</td>
+                       |  <td>${if (tuple._1._2.enabled) "<span class=\"badge rounded-pill text-bg-success\">yes</span>" else "<span class=\"badge rounded-pill text-bg-danger\">no</span>"}</td>
+                       |  <td>${if (tuple._1._2.metadata.get("waiting-approval").contains("true")) "<span class=\"badge rounded-pill text-bg-warning\">waiting approval</span>" else "<span class=\"badge rounded-pill text-bg-success\">approved</span>"}</td>
+                       |  <td>
+                       |    <div class="btn-group">
+                       |      <button class="btn btn-sm btn-outline-success apikey-edit" title="edit apikey"
+                       |        data-client-id="${tuple._1._2.clientId}"
+                       |        data-name="${tuple._1._2.clientName}"
+                       |        data-description="${tuple._1._2.description}"
+                       |        data-bearer="${if (tuple._1._2.metadata.get("waiting-approval").contains("true")) "--" else tuple._1._2.toBearer()}"
+                       |        data-enabled="${tuple._1._2.enabled}"
+                       |        data-plan="${tuple._1._3.id}"
+                       |        data-sub="${tuple._1._1.id}"
+                       |      ><i class="bi bi-pencil-square"></i></button>
+                       |      <button class="btn btn-sm btn-outline-primary apikey-bearer-copy" title="copy bearer"
+                       |        data-bearer="${tuple._1._2.toBearer()}"
+                       |      ><i class="bi bi-copy"></i></button>
+                       |      <button class="btn btn-sm btn-outline-danger apikey-delete" title="delete apikey"
+                       |        data-client-id="${tuple._1._2.clientId}"
+                       |        data-sub="${tuple._1._1.id}"
+                       |        data-plan="${tuple._1._3.id}"
+                       |      ><i class="bi bi-trash"></i></button></div>
+                       |  </td>
+                       |</tr>""".stripMargin
+                  }.mkString("\n")}
+           |    </tbody>
+           |    <script>
+           |      [].slice.call(document.querySelectorAll('[data-bearer]')).map(b => {
+           |        b.addEventListener('click', () => {
+           |          navigator.clipboard.writeText(b.getAttribute('data-bearer'))
+           |        });
+           |      });
+           |      [].slice.call(document.querySelectorAll('.apikey-edit')).map(b => {
+           |        b.addEventListener('click', () => {
+           |          const client_id = b.getAttribute('data-client-id');
+           |          const name = b.getAttribute('data-name');
+           |          const description = b.getAttribute('data-description');
+           |          const bearer = b.getAttribute('data-bearer');
+           |          const enabled = b.getAttribute('data-enabled');
+           |          const plan = b.getAttribute('data-plan');
+           |          const apikey = { client_id, name, description, bearer, enabled, plan };
+           |          openApiKeyEditor({ mode: 'update', apikey });
+           |        });
+           |      });
+           |      [].slice.call(document.querySelectorAll('.apikey-create')).map(b => {
+           |        b.addEventListener('click', () => {
+           |          const plan = b.getAttribute('data-plan');
+           |          openApiKeyEditor({ mode: 'create', plan });
+           |        });
+           |      });
+           |      [].slice.call(document.querySelectorAll('.apikey-delete')).map(b => {
+           |        b.addEventListener('click', () => {
+           |          const client_id = b.getAttribute('data-client-id');
+           |          const sub = b.getAttribute('data-sub');
+           |          const plan = b.getAttribute('data-plan');
+           |          let ok = window.confirm("Are you sure you want to delete this apikey ?");
+           |          if (ok) {
+             |          fetch('${config.prefix.getOrElse("")}/api/apikeys/' + client_id, {
+             |            method: "DELETE",
+             |            credentials: "include",
+             |          }).then(() => {
+             |            setTimeout(() => {
+             |              window.location.reload()
+             |            }, 200);
+           |            });
+           |          }
+           |        });
+           |      });
+           |    </script>
+           |  </table>
+           |</div>
+           |""".stripMargin)).as("text/html").vfuture
     }
   }
+
   def serveAllApikeys(api: Api, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(implicit  env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
-    api.consumers.find(c => c.status == ApiConsumerStatus.Published) match {
-      case None => Results.Ok(Json.arr()).vfuture
-      case Some(consumer) => apikeysFromApiForUser(consumer, ctx).flatMap { apikeys =>
-        Results.Ok(JsArray(apikeys.map {
-          case (sub, key) =>
-            key.metadata.get("waiting-approval") match {
-              case Some("true") => Json.obj(
-                "client_id" -> key.clientId,
-                "name" -> key.clientName,
-                "description" -> key.description,
-                "bearer" -> "--",
-                "enabled" -> false,
-                "sub" -> sub.id,
-                "consumer" -> consumer.id,
-                "status" -> "waiting-approval",
-              )
-              case _ => Json.obj(
-                "client_id" -> key.clientId,
-                "name" -> key.clientName,
-                "description" -> key.description,
-                "bearer" -> key.toBearer(),
-                "enabled" -> key.enabled,
-                "sub" -> sub.id,
-                "consumer" -> consumer.id,
-                "status" -> "validated",
-              )
-            }
-        })).as("application/json").vfuture
-      }
+    Source(api.plans.filter(c => c.status == ApiPlanStatus.Published).toList).mapAsync(1) { plan =>
+      apikeysFromApiForUser(plan, ctx).map(_.map(t => (t._1, t._2, plan)))
+    }
+    .flatMapConcat(s => Source(s.toList))
+    .runWith(Sink.seq)
+    .flatMap { apikeys =>
+      Results.Ok(JsArray(apikeys.map {
+        case (sub, key, plan) =>
+          key.metadata.get("waiting-approval") match {
+            case Some("true") => Json.obj(
+              "client_id" -> key.clientId,
+              "name" -> key.clientName,
+              "description" -> key.description,
+              "bearer" -> "--",
+              "enabled" -> false,
+              "sub" -> sub.id,
+              "plan" -> plan.id,
+              "status" -> "waiting-approval",
+            )
+            case _ => Json.obj(
+              "client_id" -> key.clientId,
+              "name" -> key.clientName,
+              "description" -> key.description,
+              "bearer" -> key.toBearer(),
+              "enabled" -> key.enabled,
+              "sub" -> sub.id,
+              "plan" -> plan.id,
+              "status" -> "validated",
+            )
+          }
+      })).as("application/json").vfuture
     }
   }
   def serveApiTester(api: Api, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(implicit  env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
@@ -617,24 +587,20 @@ object OtoroshiApiPortal {
       val enabledOpt = bodyJson.select("enabled").asOpt[Boolean]
       val planOpt = bodyJson.select("plan").asOpt[String]
       val clientName = nameOpt.getOrElse("New apikey")
-
       (for {
         user <- ctx.user
         doc <- api.documentation
         plan <- doc.plans.find(p => planOpt.contains(p.id)).orElse(doc.plans.headOption)
-        consumer <- api.consumers.find(v => plan.consumerId.contains(v.id)).orElse(
-          api.consumers.find(c => c.status == ApiConsumerStatus.Published && c.consumerKind == ApiConsumerKind.Apikey)
-        )
       } yield {
-        val sub_id = s"api-consumer-subscription_${IdGenerator.uuid}"
+        val sub_id = s"api-plan-subscription_${IdGenerator.uuid}"
         val clientId = IdGenerator.lowerCaseToken(16)
-        val sub = ApiConsumerSubscription(
+        val sub = ApiSubscription(
           location = api.location,
           id = sub_id,
           name = s"subscription - ${clientName}",
           description = descriptionOpt.getOrElse(""),
-          enabled = true,//consumer.autoValidation,
-          dates = ApiConsumerSubscriptionDates(
+          enabled = true,
+          dates = ApiSubscriptionDates(
             created_at = DateTime.now(),
             processed_at = DateTime.now(),
             started_at = DateTime.now(),
@@ -643,10 +609,10 @@ object OtoroshiApiPortal {
             closed_at = DateTime.now(),
           ),
           ownerRef = user.email,
-          consumerRef = consumer.id,
           apiRef = api.id,
-          subscriptionKind = consumer.consumerKind,
-          tokenRefs = if (consumer.autoValidation) Seq(clientId) else Seq.empty,
+          subscriptionKind = plan.accessModeConfiguration.map(_.apiKind).getOrElse(ApiKind.Keyless),
+          tokenRefs = if (plan.validation.isAuto) Seq(clientId) else Seq.empty,
+          planRef = plan.id,
           tags = Seq.empty,
           metadata = Map(
             "created_by" -> "otoroshi-api-portal-plugin",
@@ -664,15 +630,14 @@ object OtoroshiApiPortal {
           description = descriptionOpt.getOrElse(""),
           authorizedEntities = Seq(ApiIdentifier(api.id)),
           enabled = enabledOpt.getOrElse(true),
-          throttlingQuota = plan.throttlingQuota,
-          dailyQuota = plan.dailyQuota,
-          monthlyQuota = plan.monthlyQuota,
+          throttlingQuota = plan.accessModeConfiguration.map(_.throttlingQuota).getOrElse(RemainingQuotas.MaxValue),
+          dailyQuota = plan.accessModeConfiguration.map(_.dailyQuota).getOrElse(RemainingQuotas.MaxValue),
+          monthlyQuota = plan.accessModeConfiguration.map(_.monthlyQuota).getOrElse(RemainingQuotas.MaxValue),
           tags = plan.tags,
           metadata = plan.metadata ++ Map(
             "created_by" -> "otoroshi-api-portal-plugin",
             "otoroshi-api-ref" -> api.id,
             "otoroshi-api-sub-ref" -> sub.id,
-            "otoroshi-api-consumer-ref" -> consumer.id,
             "otoroshi-api-plan-ref" -> plan.id,
             "otoroshi-api-plan-name" -> plan.name,
             "created_at" -> DateTime.now().toString(),
@@ -681,24 +646,25 @@ object OtoroshiApiPortal {
           location = api.location,
         )
         if (env.clusterConfig.mode.isWorker) {
-          if (consumer.autoValidation) {
+          if (plan.validation.isAuto) {
             ClusterAgent.clusterSaveApikey(env, newApikey)(ec, env.otoroshiMaterializer)
           }
           // TODO: implement it
           // ClusterAgent.clusterSaveSub(env, sub)(ec, env.otoroshiMaterializer)
           // ClusterAgent.clusterSaveApi(env, sub)(ec, env.otoroshiMaterializer)
         }
-        env.datastores.apiDataStore.set(api.copy(consumers = api.consumers.map { c =>
-          if (c.id == consumer.id) {
-            c.copy(
-              subscriptions = c.subscriptions :+ ApiConsumerSubscriptionRef(sub_id),
-            )
-          } else {
-            c
-          }
-        })).flatMap { _ =>
-          env.datastores.apiConsumerSubscriptionDataStore.set(sub).flatMap { _ =>
-            if (consumer.autoValidation) {
+        // TODO: right now api plan does not store subscription refs but maybe we will need it
+        // env.datastores.apiDataStore.set(api.copy(consumers = api.consumers.map { c =>
+        //   if (c.id == consumer.id) {
+        //     c.copy(
+        //       subscriptions = c.subscriptions :+ ApiConsumerSubscriptionRef(sub_id),
+        //     )
+        //   } else {
+        //     c
+        //   }
+        // })).flatMap { _ =>
+          env.datastores.apiSubscriptionDataStore.set(sub).flatMap { _ =>
+            if (plan.validation.isAuto) {
               env.datastores.apiKeyDataStore.set(newApikey).map { _ =>
                 Results.Ok(Json.obj(
                   "client_id" -> newApikey.clientId,
@@ -707,7 +673,7 @@ object OtoroshiApiPortal {
                   "bearer" -> newApikey.toBearer(),
                   "enabled" -> newApikey.enabled,
                   "sub" -> sub.id,
-                  "consumer" -> consumer.id,
+                  "plan" -> plan.id,
                   "status" -> "validated",
                 )).as("application/json")
               }
@@ -719,12 +685,12 @@ object OtoroshiApiPortal {
                 "bearer" -> "--",
                 "enabled" -> false,
                 "sub" -> sub.id,
-                "consumer" -> consumer.id,
+                "plan" -> plan.id,
                 "status" -> "waiting-approval",
               )).as("application/json").vfuture
             }
           }
-        }
+        //}
       }).getOrElse {
         Results.BadRequest(Json.obj("error" -> "bad request")).vfuture
       }
@@ -736,47 +702,41 @@ object OtoroshiApiPortal {
       case Some(user) => env.datastores.apiKeyDataStore.findById(client_id).flatMap {
         case None => Results.Unauthorized(Json.obj("error" -> "apikey not found")).vfuture
         case Some(apikey) => {
-          apikey.metadata.get("otoroshi-api-consumer-ref") match {
-            case None => Results.Unauthorized(Json.obj("error" -> "cref not found")).vfuture
-            case Some(consumer_id) => apikey.metadata.get("otoroshi-api-sub-ref") match {
-              case None => Results.Unauthorized(Json.obj("error" -> "sref not found")).vfuture
-              case Some(sub_id) => api.consumers.filter(c => c.status == ApiConsumerStatus.Published).find(_.id == consumer_id) match {
-                case None => Results.Unauthorized(Json.obj("error" -> "consumer not found")).vfuture
-                case Some(consumer) => consumer.subscriptions.find(_.ref == sub_id) match {
-                  case None => Results.Unauthorized(Json.obj("error" -> "subref not found")).vfuture
-                  case Some(subRef) => env.datastores.apiConsumerSubscriptionDataStore.findById(subRef.ref).flatMap {
-                    case Some(sub) if sub.ownerRef == user.email => {
-                      if (env.clusterConfig.mode.isWorker) {
-                        ClusterAgent.clusterDeleteApikey(env, apikey.clientId)(ec, env.otoroshiMaterializer)
-                        // TODO: implement it
-                        // ClusterAgent.clusterDeleteSub(env, sub)(ec, env.otoroshiMaterializer)
-                        // ClusterAgent.clusterDeleteApi(env, sub)(ec, env.otoroshiMaterializer)
-                      }
-                      env.datastores.apiDataStore.set(api.copy(consumers = api.consumers.map { c =>
-                        if (c.id == consumer.id) {
-                          c.copy(
-                            subscriptions = c.subscriptions.filterNot(_.ref == sub_id),
-                          )
-                        } else {
-                          c
-                        }
-                      })).flatMap { _ =>
-                        env.datastores.apiConsumerSubscriptionDataStore.delete(sub.id).flatMap { _ =>
-                          env.datastores.apiKeyDataStore.delete(apikey.clientId).map { _ =>
-                            Results.NoContent
-                          }
-                        }
-                      }
-                    }
-                    case None => Results.Unauthorized(Json.obj("error" -> "sub not found")).vfuture
+          apikey.metadata.get("otoroshi-api-sub-ref") match {
+            case None => Results.Unauthorized(Json.obj("error" -> "sref not found")).vfuture
+            case Some(sub_id) =>
+              env.datastores.apiSubscriptionDataStore.findById(sub_id).flatMap {
+                case None => Results.Unauthorized(Json.obj("error" -> "sub not found")).vfuture
+                case Some(sub) if sub.apiRef != api.id => Results.Unauthorized(Json.obj("error" -> "bad sub")).vfuture
+                case Some(sub) => {
+                  if (env.clusterConfig.mode.isWorker) {
+                    ClusterAgent.clusterDeleteApikey(env, apikey.clientId)(ec, env.otoroshiMaterializer)
+                    // TODO: implement it
+                    // ClusterAgent.clusterDeleteSub(env, sub)(ec, env.otoroshiMaterializer)
+                    // ClusterAgent.clusterDeleteApi(env, sub)(ec, env.otoroshiMaterializer)
                   }
+                  // TODO: here plans don't store sub refs
+                  //env.datastores.apiDataStore.set(api.copy(consumers = api.consumers.map { c =>
+                  //  if (c.id == consumer.id) {
+                  //    c.copy(
+                  //      subscriptions = c.subscriptions.filterNot(_.ref == sub_id),
+                  //    )
+                  //  } else {
+                  //    c
+                  //  }
+                  //})).flatMap { _ =>
+                  env.datastores.apiSubscriptionDataStore.delete(sub.id).flatMap { _ =>
+                    env.datastores.apiKeyDataStore.delete(apikey.clientId).map { _ =>
+                      Results.NoContent
+                    }
+                  }
+                  //}
                 }
               }
             }
           }
         }
       }
-    }
   }
   def serveUpdateApikey(api: Api, client_id: String, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(implicit  env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
     ctx.request.body.runFold(ByteString.empty)(_ ++ _).flatMap { body =>
@@ -789,15 +749,15 @@ object OtoroshiApiPortal {
         case Some(user) => env.datastores.apiKeyDataStore.findById(client_id).flatMap {
           case None => Results.Unauthorized(Json.obj("error" -> "apikey not found")).vfuture
           case Some(apikey) => {
-            apikey.metadata.get("otoroshi-api-consumer-ref") match {
+            apikey.metadata.get("otoroshi-api-plan-ref") match {
               case None => Results.Unauthorized(Json.obj("error" -> "cref not found")).vfuture
-              case Some(consumer_id) => apikey.metadata.get("otoroshi-api-sub-ref") match {
+              case Some(plan_id) => apikey.metadata.get("otoroshi-api-sub-ref") match {
                 case None => Results.Unauthorized(Json.obj("error" -> "sref not found")).vfuture
-                case Some(sub_id) => api.consumers.filter(c => c.status == ApiConsumerStatus.Published).find(_.id == consumer_id) match {
-                  case None => Results.Unauthorized(Json.obj("error" -> "consumer not found")).vfuture
-                  case Some(consumer) => consumer.subscriptions.find(_.ref == sub_id) match {
+                case Some(sub_id) => api.plans.filter(c => c.status == ApiPlanStatus.Published).find(_.id == plan_id) match {
+                  case None => Results.Unauthorized(Json.obj("error" -> "plan not found")).vfuture
+                  case Some(plan) => Option(sub_id) match { // TODO: need to store sub refs on plan ?
                     case None => Results.Unauthorized(Json.obj("error" -> "subref not found")).vfuture
-                    case Some(subRef) => env.datastores.apiConsumerSubscriptionDataStore.findById(subRef.ref).flatMap {
+                    case Some(subRef) => env.datastores.apiSubscriptionDataStore.findById(subRef).flatMap {
                       case Some(sub) if sub.ownerRef == user.email => {
                         val newApikey = apikey.copy(
                           clientName = nameOpt.getOrElse(apikey.clientName),
@@ -809,8 +769,8 @@ object OtoroshiApiPortal {
                           // TODO
                           // ClusterAgent.clusterSaveSub(env, sub)(ec, env.otoroshiMaterializer)
                         }
-                        env.datastores.apiConsumerSubscriptionDataStore.set(sub.copy(name = s"subscription - ${newApikey.clientName}", description = newApikey.description)).flatMap { _ =>
-                          if (consumer.autoValidation && sub.enabled) {
+                        env.datastores.apiSubscriptionDataStore.set(sub.copy(name = s"subscription - ${newApikey.clientName}", description = newApikey.description)).flatMap { _ =>
+                          if (plan.validation.isAuto && sub.enabled) {
                             env.datastores.apiKeyDataStore.set(newApikey).map { _ =>
                               Results.Ok(Json.obj(
                                 "client_id" -> newApikey.clientId,
@@ -819,7 +779,7 @@ object OtoroshiApiPortal {
                                 "bearer" -> newApikey.toBearer(),
                                 "enabled" -> newApikey.enabled,
                                 "sub" -> sub.id,
-                                "consumer" -> consumer.id,
+                                "plan" -> plan.id,
                                 "status" -> "validated"
                               )).as("application/json")
                             }
@@ -831,7 +791,7 @@ object OtoroshiApiPortal {
                               "bearer" -> "--",
                               "enabled" -> false,
                               "sub" -> sub.id,
-                              "consumer" -> consumer.id,
+                              "plan" -> plan.id,
                               "status" -> "waiting-approval",
                             )).as("application/json").vfuture
                           }
@@ -1751,7 +1711,7 @@ object OtoroshiApiPortal {
        |        <ul class="navbar-nav me-3">
        |          ${doc.navigation.map(nav => s"""<li class="nav-item"><a class="nav-link ${navPathActive(nav.path, ctx, prefix)}" href="${prefix}${nav.path.headOption.getOrElse("#")}">${renderResourceAsIcon(nav.icon, doc, Some("max-height: 35px"))}${nav.label}</a></li>""").mkString("\n")}
        |          <li class="nav-item"><a class="nav-link ${navPathActive(Seq("/api-references"), ctx, prefix)}" href="${prefix}/api-references">API Reference</a></li>
-       |          ${if (ctx.user.isDefined && api.consumers.exists(_.consumerKind != ApiConsumerKind.Keyless)) {
+       |          ${if (ctx.user.isDefined && api.plans.exists(_.accessModeConfiguration.map(_.apiKind).getOrElse(ApiKind.Keyless) != ApiKind.Keyless)) {
                     s"""<li class="nav-item"><a class="nav-link ${navPathActive(Seq("/subscriptions"), ctx, prefix)}" href="${prefix}/subscriptions">Subscriptions</a></li>"""
                   } else ""}
        |          <!--li class="nav-item"><a class="nav-link ${navPathActive(Seq("/tester"), ctx, prefix)}" href="${prefix}/tester">Tester</a></li-->
