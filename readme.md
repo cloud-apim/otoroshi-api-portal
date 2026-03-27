@@ -14,3 +14,7 @@ a simple dev portal for Otoroshi APIs that supports documentation rendering, ope
 
 ![openapi](./screenshots/openapi.png)
 
+## Subscriptions
+
+![subscriptions](./screenshots/subscriptions.png)
+
