@@ -166,7 +166,7 @@ object OtoroshiApiPortal {
   def apikeysFromApiForUser(plan: ApiDocumentationPlan, ctx: NgbBackendCallContext)(implicit  env: Env, ec: ExecutionContext, mat: Materializer): Future[Seq[(ApiSubscription, ApiKey)]] = {
     Source(env.proxyState.allApiSubscriptions().toList)
       .filter(_.planRef == plan.id)
-      .filter(_.enabled)
+      .filter(_.status == ApiSubscriptionEnabled)
       .filter(_.subscriptionKind == ApiKind.Apikey)
       .filter(c => ctx.user.map(_.email).contains(c.ownerRef))
       .flatMapConcat(sub => if (sub.tokenRefs.isEmpty) Source.single((sub, "--")) else Source(sub.tokenRefs.map(r => (sub, r)).toList))
@@ -942,7 +942,7 @@ object OtoroshiApiPortal {
     ).as("text/javascript").vfuture
   }
   def servePlansJson(api: Api, doc: ApiDocumentation, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(implicit  env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
-    Results.Ok(JsArray(doc.plans.map(_.raw))).vfuture
+    Results.Ok(JsArray(api.plans.map(_.raw))).vfuture
   }
   def serveDocumentationJson(api: Api, doc: ApiDocumentation, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(implicit  env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
     Results.Ok(doc.json.asObject - "source" ++ Json.obj(
@@ -1144,7 +1144,7 @@ object OtoroshiApiPortal {
       (for {
         user <- ctx.user
         doc <- api.documentation
-        plan <- doc.plans.find(p => planOpt.contains(p.id)).orElse(doc.plans.headOption)
+        plan <- api.plans.find(p => planOpt.contains(p.id)).orElse(api.plans.headOption)
       } yield {
         val sub_id = s"api-plan-subscription_${IdGenerator.uuid}"
         val clientId = IdGenerator.lowerCaseToken(16)
@@ -1153,7 +1153,7 @@ object OtoroshiApiPortal {
           id = sub_id,
           name = s"subscription - ${clientName}",
           description = descriptionOpt.getOrElse(""),
-          enabled = true,
+          status = ApiSubscriptionEnabled,
           dates = ApiSubscriptionDates(
             created_at = DateTime.now(),
             processed_at = DateTime.now(),
@@ -1184,9 +1184,9 @@ object OtoroshiApiPortal {
           description = descriptionOpt.getOrElse(""),
           authorizedEntities = Seq(ApiIdentifier(api.id)),
           enabled = enabledOpt.getOrElse(true),
-          throttlingQuota = plan.accessModeConfiguration.map(_.throttlingQuota).getOrElse(RemainingQuotas.MaxValue),
-          dailyQuota = plan.accessModeConfiguration.map(_.dailyQuota).getOrElse(RemainingQuotas.MaxValue),
-          monthlyQuota = plan.accessModeConfiguration.map(_.monthlyQuota).getOrElse(RemainingQuotas.MaxValue),
+          throttlingQuota = plan.rateLimiting.map(_.quota.window).getOrElse(RemainingQuotas.MaxValue),
+          dailyQuota = plan.rateLimiting.map(_.quota.daily).getOrElse(RemainingQuotas.MaxValue),
+          monthlyQuota = plan.rateLimiting.map(_.quota.monthly).getOrElse(RemainingQuotas.MaxValue),
           tags = plan.tags,
           metadata = plan.metadata ++ Map(
             "created_by" -> "otoroshi-api-portal-plugin",
@@ -1324,7 +1324,7 @@ object OtoroshiApiPortal {
                           // ClusterAgent.clusterSaveSub(env, sub)(ec, env.otoroshiMaterializer)
                         }
                         env.datastores.apiSubscriptionDataStore.set(sub.copy(name = s"subscription - ${newApikey.clientName}", description = newApikey.description)).flatMap { _ =>
-                          if (plan.validation.isAuto && sub.enabled) {
+                          if (plan.validation.isAuto && sub.status == ApiSubscriptionEnabled) {
                             env.datastores.apiKeyDataStore.set(newApikey).map { _ =>
                               Results.Ok(Json.obj(
                                 "client_id" -> newApikey.clientId,
@@ -1564,7 +1564,7 @@ object OtoroshiApiPortal {
          |    <p class="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-400">Jump between guides, reference material and self-service access without losing context.</p>
          |    <div class="mt-5 space-y-3">
          |      <a class="inline-flex w-full items-center justify-center gap-2 rounded-full bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:-translate-y-0.5 dark:bg-white dark:text-slate-950" href="${prefix}/api-references">API reference</a>
-         |      ${if (ctx.user.isDefined && doc.plans.exists(_.accessModeConfiguration.map(_.apiKind).getOrElse(ApiKind.Keyless) != ApiKind.Keyless)) {
+         |      ${if (ctx.user.isDefined && api.plans.exists(_.accessModeConfiguration.map(_.apiKind).getOrElse(ApiKind.Keyless) != ApiKind.Keyless)) {
               s"""<a class="inline-flex w-full items-center justify-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:-translate-y-0.5 dark:border-white/10 dark:bg-slate-800 dark:text-slate-200" href="${prefix}/subscriptions">Subscriptions</a>"""
             } else ""}
          |    </div>
@@ -1575,7 +1575,7 @@ object OtoroshiApiPortal {
          |      </div>
          |      <div class="rounded-2xl bg-stone-100/80 px-3 py-3 dark:bg-white/5">
          |        <dt class="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">Plans</dt>
-         |        <dd class="mt-2 text-lg font-semibold text-slate-950 dark:text-white">${doc.plans.count(_.status == ApiPlanStatus.Published)}</dd>
+         |        <dd class="mt-2 text-lg font-semibold text-slate-950 dark:text-white">${api.plans.count(_.status == ApiPlanStatus.Published)}</dd>
          |      </div>
          |    </dl>
          |  </div>
@@ -1818,7 +1818,7 @@ object OtoroshiApiPortal {
         .map(nav => s"""<a class="inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium transition ${navPathActive(nav.path, ctx, prefix)}" href="${prefix}${nav.path.headOption.getOrElse("#")}">${renderResourceAsIcon(nav.icon, doc, Some("max-height: 18px;"))}<span>${nav.label}</span></a>""")
         .mkString("\n")
     val subscriptionsTab =
-      if (ctx.user.isDefined && doc.plans.exists(_.accessModeConfiguration.map(_.apiKind).getOrElse(ApiKind.Keyless) != ApiKind.Keyless)) {
+      if (ctx.user.isDefined && api.plans.exists(_.accessModeConfiguration.map(_.apiKind).getOrElse(ApiKind.Keyless) != ApiKind.Keyless)) {
         s"""<a class="inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium transition ${navPathActive(Seq("/subscriptions"), ctx, prefix)}" href="${prefix}/subscriptions"><i class="bi bi-key"></i><span>Subscriptions</span></a>"""
       } else {
         ""

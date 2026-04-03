@@ -51,22 +51,6 @@ object ApiDocumentationExample {
           |  <a href="/foo">Go to doc !</a>
           |</div>""".stripMargin
     )),
-    plans = Seq(ApiDocumentationPlan(Json.obj(
-      "id" -> "dev",
-      "name" -> "Dev",
-      "description" -> "An apikey to try the API on prototypes",
-      "access_mode_configuration_type" -> "apikey",
-      "access_mode_configuration" -> Json.obj(
-        "throttling_quota" -> 100,
-        "daily_quota" -> 1000,
-        "monthly_quota" -> 1000,
-      ),
-      "status" -> "published",
-      "tags" -> Json.arr(),
-      "metadata" -> Json.obj(
-        "env" -> "dev"
-      ),
-    ))),
     resources = Seq(
       ApiDocumentationResource(Json.obj(
         "title" -> "Rick & Morty API oas",
@@ -212,22 +196,6 @@ object ApiDocumentationExample {
           |</div>
           |""".stripMargin
     )),
-    plans = Seq(ApiDocumentationPlan(Json.obj(
-      "id" -> "dev",
-      "name" -> "Dev",
-      "description" -> "An apikey to try the API on prototypes",
-      "access_mode_configuration_type" -> "apikey",
-      "access_mode_configuration" -> Json.obj(
-        "throttling_quota" -> 100,
-        "daily_quota" -> 1000,
-        "monthly_quota" -> 1000,
-      ),
-      "status" -> "published",
-      "tags" -> Json.arr(),
-      "metadata" -> Json.obj(
-        "env" -> "dev"
-      ),
-    ))),
     resources = Seq(
       ApiDocumentationResource(Json.obj(
         "title" -> "Wines API",
