@@ -169,7 +169,7 @@ object OtoroshiApiPortal {
       .filter(_.status == ApiSubscriptionEnabled)
       .filter(_.subscriptionKind == ApiKind.Apikey)
       .filter(c => ctx.user.map(_.email).contains(c.ownerRef))
-      .flatMapConcat(sub => if (sub.tokenRefs.isEmpty) Source.single((sub, "--")) else Source(sub.tokenRefs.map(r => (sub, r)).toList))
+      .flatMapConcat(sub => if (sub.tokenRefs.isEmpty) Source.single((sub, "--")) else Source(sub.tokenRefs.filter(_.select("apikey").isDefined).map(r => (sub, r.select("apikey").asString)).toList))
       .mapAsync(1) {
         case (sub, tok) if tok == "--" && sub.tokenRefs.isEmpty => (sub, ApiKey(
           clientId = IdGenerator.token(16),
@@ -188,7 +188,8 @@ object OtoroshiApiPortal {
           ),
           location = sub.location,
         ).some).vfuture
-        case (sub, token) => env.datastores.apiKeyDataStore.findById(token).map(key => (sub, key))
+        case (sub, token) =>
+          env.datastores.apiKeyDataStore.findById(token).map(key => (sub, key))
       }
       .flatMapConcat {
         case (sub, opt) => Source(opt.map(key => (sub, key)).toList)
@@ -1165,7 +1166,7 @@ object OtoroshiApiPortal {
           ownerRef = user.email,
           apiRef = api.id,
           subscriptionKind = plan.accessModeConfiguration.map(_.apiKind).getOrElse(ApiKind.Keyless),
-          tokenRefs = if (plan.validation.isAuto) Seq(clientId) else Seq.empty,
+          tokenRefs = if (plan.validation.isAuto) Seq(Json.obj("apikey" -> clientId)) else Seq.empty,
           planRef = plan.id,
           tags = Seq.empty,
           metadata = Map(
