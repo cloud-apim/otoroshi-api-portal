@@ -1,23 +1,25 @@
 package otoroshi_plugins.com.cloud.apim.plugins.apiportal
 
-import akka.stream.Materializer
-import akka.stream.scaladsl.{Sink, Source}
-import akka.util.ByteString
-import next.models._
+import next.models.*
+import org.apache.pekko.stream.Materializer
+import org.apache.pekko.stream.scaladsl.{Sink, Source}
+import org.apache.pekko.util.ByteString
 import org.joda.time.DateTime
 import otoroshi.cluster.ClusterAgent
 import otoroshi.env.Env
 import otoroshi.models.{ApiIdentifier, ApiKey, RemainingQuotas}
-import otoroshi.next.plugins.api._
+import otoroshi.next.plugins.api.*
 import otoroshi.next.proxy.NgProxyEngineError
 import otoroshi.security.IdGenerator
-import otoroshi.utils.syntax.implicits._
-import play.api.libs.json._
+import otoroshi.utils.syntax.implicits.*
+import play.api.libs.json.*
+import play.api.libs.ws.WSBodyReadables.given
+import play.api.libs.ws.WSBodyWritables.given
 import play.api.mvc.{Result, Results}
 
 import scala.concurrent.duration.DurationInt
 import scala.concurrent.{ExecutionContext, Future}
-import scala.util._
+import scala.util.*
 
 /**
  * TODO:
@@ -42,6 +44,18 @@ import scala.util._
  *   - Page apikeys
  *
  */
+
+extension (result: Result) {
+  /** Wraps a plain `Result` into the `Either` expected by `NgBackendCall.callBackend`. */
+  def asBackendCall: Either[NgProxyEngineError, BackendCallResponse] =
+    BackendCallResponse(NgPluginHttpResponse.fromResult(result), None).right
+}
+
+extension (result: Future[Result]) {
+  /** Same as `Result.asBackendCall`, lifted over the `Future` returned by every route handler. */
+  def asBackendCall(using ec: ExecutionContext): Future[Either[NgProxyEngineError, BackendCallResponse]] =
+    result.map(_.asBackendCall)
+}
 
 case class OtoroshiApiPortalConfig(prefix: Option[String], apiRef: Option[String]) extends NgPluginConfig {
   def json: JsValue = OtoroshiApiPortalConfig.format.writes(this)
@@ -69,7 +83,7 @@ object OtoroshiApiPortalConfig {
       )
     )
   )
-  val format = new Format[OtoroshiApiPortalConfig] {
+  given format: Format[OtoroshiApiPortalConfig] = new Format[OtoroshiApiPortalConfig] {
     override def reads(json: JsValue): JsResult[OtoroshiApiPortalConfig] = Try {
       OtoroshiApiPortalConfig(
         prefix = json.select("prefix").asOptString,
@@ -115,16 +129,16 @@ class OtoroshiApiPortal extends NgBackendCall {
   override def callBackend(
                             ctx: NgbBackendCallContext,
                             delegates: () => Future[Either[NgProxyEngineError, BackendCallResponse]]
-                          )(implicit
+                          )(using
                             env: Env,
                             ec: ExecutionContext,
                             mat: Materializer
                           ): Future[Either[NgProxyEngineError, BackendCallResponse]] = {
     val config = ctx.cachedConfig(internalName)(OtoroshiApiPortalConfig.format).getOrElse(OtoroshiApiPortalConfig.default)
     config.apiRef match {
-      case None => BackendCallResponse(NgPluginHttpResponse.fromResult(Results.NotFound("API ref not found")), None).rightf
+      case None => Results.NotFound("API ref not found").asBackendCall.vfuture
       case Some(ref) => env.datastores.apiDataStore.findById(ref) flatMap {
-        case None => BackendCallResponse(NgPluginHttpResponse.fromResult(Results.NotFound("API not found")), None).rightf
+        case None => Results.NotFound("API not found").asBackendCall.vfuture
         case Some(api) => api
           .applyOnIf(api.metadata.get("doc_template").contains("wines"))(_.copy(documentation = ApiDocumentationExample.wines.some))
           .applyOnIf(api.metadata.get("doc_template").contains("remote"))(_.copy(documentation = ApiDocumentationExample.remote.some))
@@ -136,26 +150,27 @@ class OtoroshiApiPortal extends NgBackendCall {
               val prefix = config.prefix.getOrElse("")
               val path = ctx.request.path.replaceFirst(prefix, "").toLowerCase()
               (ctx.request.method.toLowerCase(), path) match {
-                case ("put", path) if path.startsWith("/api/apikeys/") => OtoroshiApiPortal.serveUpdateApikey(api, path.replaceFirst("/api/apikeys/", ""), ctx, config).map(r => BackendCallResponse(NgPluginHttpResponse.fromResult(r), None).right)
-                case ("delete", path) if path.startsWith("/api/apikeys/") => OtoroshiApiPortal.serveDeleteApikey(api, path.replaceFirst("/api/apikeys/", ""), ctx, config).map(r => BackendCallResponse(NgPluginHttpResponse.fromResult(r), None).right)
-                case ("post", "/api/apikeys") => OtoroshiApiPortal.serveCreateApikey(api, ctx, config).map(r => BackendCallResponse(NgPluginHttpResponse.fromResult(r), None).right)
-                case ("get",  "/api/apikeys") => OtoroshiApiPortal.serveAllApikeys(api, ctx, config).map(r => BackendCallResponse(NgPluginHttpResponse.fromResult(r), None).right)
-                case ("post", "/api/_test") => OtoroshiApiPortal.serveApiTester(api, ctx, config).map(r => BackendCallResponse(NgPluginHttpResponse.fromResult(r), None).right)
-                case ("get", "/api/plans") => OtoroshiApiPortal.servePlansJson(api, doc, ctx, config).map(r => BackendCallResponse(NgPluginHttpResponse.fromResult(r), None).right)
-                case ("get", "/api/documentation") => OtoroshiApiPortal.serveDocumentationJson(api, doc, ctx, config).map(r => BackendCallResponse(NgPluginHttpResponse.fromResult(r), None).right)
+                case ("put", path) if path.startsWith("/api/apikeys/") => OtoroshiApiPortal.serveUpdateApikey(api, path.replaceFirst("/api/apikeys/", ""), ctx, config).asBackendCall
+                case ("delete", path) if path.startsWith("/api/apikeys/") => OtoroshiApiPortal.serveDeleteApikey(api, path.replaceFirst("/api/apikeys/", ""), ctx, config).asBackendCall
+                case ("post", "/api/apikeys") => OtoroshiApiPortal.serveCreateApikey(api, ctx, config).asBackendCall
+                case ("get",  "/api/apikeys") => OtoroshiApiPortal.serveAllApikeys(api, ctx, config).asBackendCall
+                case ("post", "/api/_test") => OtoroshiApiPortal.serveApiTester(api, ctx, config).asBackendCall
+                case ("get", "/api/plans") => OtoroshiApiPortal.servePlansJson(api, doc, ctx, config).asBackendCall
+                case ("get", "/api/documentation") => OtoroshiApiPortal.serveDocumentationJson(api, doc, ctx, config).asBackendCall
                 /////////////////////
-                case ("get", "/subscriptions/apikeys") => OtoroshiApiPortal.serveApikeysPage(api, doc, ctx, config).map(r => BackendCallResponse(NgPluginHttpResponse.fromResult(r), None).right)
-                case ("get", "/subscriptions") => OtoroshiApiPortal.serveApikeysPage(api, doc, ctx, config).map(r => BackendCallResponse(NgPluginHttpResponse.fromResult(r), None).right)
-                case ("get", "/portal.js") => OtoroshiApiPortal.serverJs(api, ctx, config).map(r => BackendCallResponse(NgPluginHttpResponse.fromResult(r), None).right)
-                case ("get", path) if path.startsWith("/api-references/") => OtoroshiApiPortal.serveApiDoc(api, doc, Some(path.replaceFirst("/api-references", "")), ctx, config).map(r => BackendCallResponse(NgPluginHttpResponse.fromResult(r), None).right)
-                case ("get", "/api-references") => OtoroshiApiPortal.serveApiDoc(api, doc, None, ctx, config).map(r => BackendCallResponse(NgPluginHttpResponse.fromResult(r), None).right)
-                case ("get", "/login") => OtoroshiApiPortal.redirectToHome(api, doc, ctx, config).map(r => BackendCallResponse(NgPluginHttpResponse.fromResult(r), None).right)
-                case ("get", "/") => OtoroshiApiPortal.serveHome(api, doc, ctx, config).map(r => BackendCallResponse(NgPluginHttpResponse.fromResult(r), None).right)
-                case ("get", "") => OtoroshiApiPortal.serveHome(api, doc, ctx, config).map(r => BackendCallResponse(NgPluginHttpResponse.fromResult(r), None).right)
-                case ("get", path) => OtoroshiApiPortal.serveResource(api, path, doc, ctx, config).map(r => BackendCallResponse(NgPluginHttpResponse.fromResult(r), None).right)
+                case ("get", "/subscriptions/apikeys") => OtoroshiApiPortal.serveApikeysPage(api, doc, ctx, config).asBackendCall
+                case ("get", "/subscriptions") => OtoroshiApiPortal.serveApikeysPage(api, doc, ctx, config).asBackendCall
+                case ("get", "/portal.js") => OtoroshiApiPortal.serverJs(api, ctx, config).asBackendCall
+                case ("get", path) if path.startsWith("/api-references/") => OtoroshiApiPortal.serveApiDoc(api, doc, Some(path.replaceFirst("/api-references", "")), ctx, config).asBackendCall
+                case ("get", "/api-references") => OtoroshiApiPortal.serveApiDoc(api, doc, None, ctx, config).asBackendCall
+                case ("get", "/login") => OtoroshiApiPortal.redirectToHome(api, doc, ctx, config).asBackendCall
+                case ("get", "/") => OtoroshiApiPortal.serveHome(api, doc, ctx, config).asBackendCall
+                case ("get", "") => OtoroshiApiPortal.serveHome(api, doc, ctx, config).asBackendCall
+                case ("get", path) => OtoroshiApiPortal.serveResource(api, path, doc, ctx, config).asBackendCall
+                case _ => Results.NotFound("Resource not found").asBackendCall.vfuture
               }
             }
-          case _ => BackendCallResponse(NgPluginHttpResponse.fromResult(Results.NotFound("API doc not found")), None).rightf
+          case _ => Results.NotFound("API doc not found").asBackendCall.vfuture
         }
       }
     }
@@ -163,7 +178,7 @@ class OtoroshiApiPortal extends NgBackendCall {
 }
 
 object OtoroshiApiPortal {
-  def apikeysFromApiForUser(plan: ApiDocumentationPlan, ctx: NgbBackendCallContext)(implicit  env: Env, ec: ExecutionContext, mat: Materializer): Future[Seq[(ApiSubscription, ApiKey)]] = {
+  def apikeysFromApiForUser(plan: ApiDocumentationPlan, ctx: NgbBackendCallContext)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Seq[(ApiSubscription, ApiKey)]] = {
     Source(env.proxyState.allApiSubscriptions().toList)
       .filter(_.planRef == plan.id)
       .filter(_.status == ApiSubscriptionEnabled)
@@ -196,7 +211,7 @@ object OtoroshiApiPortal {
       }
       .runWith(Sink.seq)
   }
-  def handleRedirections(doc: ApiDocumentation, path: String)(f: => Future[Result])(implicit  env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
+  def handleRedirections(doc: ApiDocumentation, path: String)(f: => Future[Result])(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
     (doc.redirections :+ ApiDocumentationRedirection(Json.obj("from" -> "/logout", "to" -> "/.well-known/otoroshi/logout"))).find(_.from == path) match {
       case Some(redirection) => {
         Results.Redirect(redirection.to, 303).vfuture
@@ -204,10 +219,10 @@ object OtoroshiApiPortal {
       case None => f
     }
   }
-  def redirectToHome(api: Api, doc: ApiDocumentation, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(implicit  env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
+  def redirectToHome(api: Api, doc: ApiDocumentation, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
     Results.Redirect(s"${config.prefix.getOrElse("")}/", 303).vfuture
   }
-  def serveHome(api: Api, doc: ApiDocumentation, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(implicit  env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
+  def serveHome(api: Api, doc: ApiDocumentation, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
     handleRedirections(doc, "/") {
       renderResource(doc.home, doc).map {
         case (body, contentType) =>
@@ -215,7 +230,7 @@ object OtoroshiApiPortal {
       }
     }
   }
-  def serveResource(api: Api, path: String, doc: ApiDocumentation, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(implicit  env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
+  def serveResource(api: Api, path: String, doc: ApiDocumentation, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
     handleRedirections(doc, path) {
       val allResources = (doc.resources ++ Seq(doc.logo))
       val foundNavTop = doc.navigation.find(_.path.contains(path))
@@ -267,7 +282,7 @@ object OtoroshiApiPortal {
       }
     }
   }
-  def serveApiDoc(api: Api, doc: ApiDocumentation, specPath: Option[String], ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(implicit  env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
+  def serveApiDoc(api: Api, doc: ApiDocumentation, specPath: Option[String], ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
     if (doc.references.nonEmpty && doc.references.size > 1) {
       val sidebar = ApiDocumentationSidebar(Json.obj(
         "items" -> JsArray(
@@ -429,7 +444,7 @@ object OtoroshiApiPortal {
       Results.NotFound("Not found !").vfuture
     }
   }
-  def serverJs(api: Api, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(implicit  env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
+  def serverJs(api: Api, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
     Results.Ok(
       s"""
          |(() => {
@@ -942,10 +957,10 @@ object OtoroshiApiPortal {
          |""".stripMargin
     ).as("text/javascript").vfuture
   }
-  def servePlansJson(api: Api, doc: ApiDocumentation, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(implicit  env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
+  def servePlansJson(api: Api, doc: ApiDocumentation, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
     Results.Ok(JsArray(api.plans.map(_.raw))).vfuture
   }
-  def serveDocumentationJson(api: Api, doc: ApiDocumentation, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(implicit  env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
+  def serveDocumentationJson(api: Api, doc: ApiDocumentation, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
     Results.Ok(doc.json.asObject - "source" ++ Json.obj(
       "name" -> api.name,
       "description" -> api.description,
@@ -955,7 +970,7 @@ object OtoroshiApiPortal {
       "doc_metadata" -> doc.metadata,
     )).vfuture
   }
-  def serveApikeysPage(api: Api, doc: ApiDocumentation, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(implicit  env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
+  def serveApikeysPage(api: Api, doc: ApiDocumentation, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
     val publishedPlans = api.plans.filter(c => c.status == ApiPlanStatus.Published)
     Source(publishedPlans.toList).mapAsync(1) { plan =>
       apikeysFromApiForUser(plan, ctx).map(_.map(t => (t._1, t._2, plan)))
@@ -1081,7 +1096,7 @@ object OtoroshiApiPortal {
     }
   }
 
-  def serveAllApikeys(api: Api, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(implicit  env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
+  def serveAllApikeys(api: Api, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
     Source(api.plans.filter(c => c.status == ApiPlanStatus.Published).toList).mapAsync(1) { plan =>
       apikeysFromApiForUser(plan, ctx).map(_.map(t => (t._1, t._2, plan)))
     }
@@ -1115,26 +1130,26 @@ object OtoroshiApiPortal {
       })).as("application/json").vfuture
     }
   }
-  def serveApiTester(api: Api, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(implicit  env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
+  def serveApiTester(api: Api, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
     ctx.request.body.runFold(ByteString.empty)(_ ++ _).flatMap { body =>
       val bodyJson = Json.parse(body.utf8String)
       val method = bodyJson.select("method").asOptString.getOrElse("GET")
       val url = bodyJson.select("url").asString
       val headers = bodyJson.select("headers").asOpt[Map[String, String]].getOrElse(Map.empty)
       val reqBody = bodyJson.select("body_json").asOpt[JsValue].filterNot(_ == JsNull)
-      env.Ws.url(url).withFollowRedirects(false).withRequestTimeout(30.seconds).withMethod(method.toUpperCase()).withHttpHeaders(headers.toSeq: _*).applyOnWithOpt(reqBody) {
+      env.Ws.url(url).withFollowRedirects(false).withRequestTimeout(30.seconds).withMethod(method.toUpperCase()).withHttpHeaders(headers.toSeq*).applyOnWithOpt(reqBody) {
         case (req, body) => req.withBody(body)
       }.execute().map { resp =>
         Results.Ok(Json.obj(
           "status" -> resp.status,
           "statusText" -> resp.statusText,
-          "headers" -> resp.headers.mapValues(_.last),
+          "headers" -> resp.headers.view.mapValues(_.last).toMap,
           "body_str" -> resp.body[String]
         ))
       }
     }
   }
-  def serveCreateApikey(api: Api, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(implicit  env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
+  def serveCreateApikey(api: Api, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
     ctx.request.body.runFold(ByteString.empty)(_ ++ _).flatMap { body =>
       val bodyJson = Json.parse(body.utf8String)
       val nameOpt = bodyJson.select("name").asOpt[String]
@@ -1202,11 +1217,11 @@ object OtoroshiApiPortal {
         )
         if (env.clusterConfig.mode.isWorker) {
           if (plan.validation.isAuto) {
-            ClusterAgent.clusterSaveApikey(env, newApikey)(ec, env.otoroshiMaterializer)
+            ClusterAgent.clusterSaveApikey(env, newApikey)(using ec, env.otoroshiMaterializer)
           }
           // TODO: implement it
-          // ClusterAgent.clusterSaveSub(env, sub)(ec, env.otoroshiMaterializer)
-          // ClusterAgent.clusterSaveApi(env, sub)(ec, env.otoroshiMaterializer)
+          // ClusterAgent.clusterSaveSub(env, sub)(using ec, env.otoroshiMaterializer)
+          // ClusterAgent.clusterSaveApi(env, sub)(using ec, env.otoroshiMaterializer)
         }
         // TODO: right now api plan does not store subscription refs but maybe we will need it
         // env.datastores.apiDataStore.set(api.copy(consumers = api.consumers.map { c =>
@@ -1251,7 +1266,7 @@ object OtoroshiApiPortal {
       }
     }
   }
-  def serveDeleteApikey(api: Api, client_id: String, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(implicit  env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
+  def serveDeleteApikey(api: Api, client_id: String, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
     ctx.user match {
       case None => Results.Unauthorized(Json.obj("error" -> "user not found")).vfuture
       case Some(user) => env.datastores.apiKeyDataStore.findById(client_id).flatMap {
@@ -1265,10 +1280,10 @@ object OtoroshiApiPortal {
                 case Some(sub) if sub.apiRef != api.id => Results.Unauthorized(Json.obj("error" -> "bad sub")).vfuture
                 case Some(sub) => {
                   if (env.clusterConfig.mode.isWorker) {
-                    ClusterAgent.clusterDeleteApikey(env, apikey.clientId)(ec, env.otoroshiMaterializer)
+                    ClusterAgent.clusterDeleteApikey(env, apikey.clientId)(using ec, env.otoroshiMaterializer)
                     // TODO: implement it
-                    // ClusterAgent.clusterDeleteSub(env, sub)(ec, env.otoroshiMaterializer)
-                    // ClusterAgent.clusterDeleteApi(env, sub)(ec, env.otoroshiMaterializer)
+                    // ClusterAgent.clusterDeleteSub(env, sub)(using ec, env.otoroshiMaterializer)
+                    // ClusterAgent.clusterDeleteApi(env, sub)(using ec, env.otoroshiMaterializer)
                   }
                   // TODO: here plans don't store sub refs
                   //env.datastores.apiDataStore.set(api.copy(consumers = api.consumers.map { c =>
@@ -1293,7 +1308,7 @@ object OtoroshiApiPortal {
         }
       }
   }
-  def serveUpdateApikey(api: Api, client_id: String, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(implicit  env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
+  def serveUpdateApikey(api: Api, client_id: String, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
     ctx.request.body.runFold(ByteString.empty)(_ ++ _).flatMap { body =>
       val bodyJson = Json.parse(body.utf8String)
       val nameOpt = bodyJson.select("name").asOpt[String]
@@ -1320,9 +1335,9 @@ object OtoroshiApiPortal {
                           enabled = enabledOpt.getOrElse(apikey.enabled),
                         )
                         if (env.clusterConfig.mode.isWorker) {
-                          ClusterAgent.clusterSaveApikey(env, newApikey)(ec, env.otoroshiMaterializer)
+                          ClusterAgent.clusterSaveApikey(env, newApikey)(using ec, env.otoroshiMaterializer)
                           // TODO
-                          // ClusterAgent.clusterSaveSub(env, sub)(ec, env.otoroshiMaterializer)
+                          // ClusterAgent.clusterSaveSub(env, sub)(using ec, env.otoroshiMaterializer)
                         }
                         env.datastores.apiSubscriptionDataStore.set(sub.copy(name = s"subscription - ${newApikey.clientName}", description = newApikey.description)).flatMap { _ =>
                           if (plan.validation.isAuto && sub.status == ApiSubscriptionEnabled) {
@@ -1352,7 +1367,7 @@ object OtoroshiApiPortal {
                           }
                         }
                       }
-                      case None => Results.Unauthorized(Json.obj("error" -> "sub not found")).vfuture
+                      case _ => Results.Unauthorized(Json.obj("error" -> "sub not found")).vfuture
                     }
                   }
                 }
@@ -1377,7 +1392,7 @@ object OtoroshiApiPortal {
     }
   }
 
-  def renderResource(resource: ApiDocumentationResource, doc: ApiDocumentation)(implicit  env: Env, ec: ExecutionContext, mat: Materializer): Future[(ByteString, String)] = {
+  def renderResource(resource: ApiDocumentationResource, doc: ApiDocumentation)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[(ByteString, String)] = {
     def handleTransform(byteString: ByteString): ByteString = {
       // TODO: handle EL
       if (resource.transform.contains("markdown")) {
@@ -1517,7 +1532,7 @@ object OtoroshiApiPortal {
     resource.resolveUrl(doc) match {
       case Some(url) => env.Ws.url(url)
         .withFollowRedirects(resource.httpFollowRedirects)
-        .withHttpHeaders(resource.httpHeaders.toSeq: _*)
+        .withHttpHeaders(resource.httpHeaders.toSeq*)
         .withRequestTimeout(resource.httpTimeout)
         .get() map { resp =>
           (handleTransform(resp.bodyAsBytes), resource.contentType)
@@ -1537,7 +1552,7 @@ object OtoroshiApiPortal {
     }
   }
 
-  def documentationPageTemplate(title: String, prefix: String, api: Api, doc: ApiDocumentation, sidebar: ApiDocumentationSidebar, ctx: NgbBackendCallContext, noInnerPadding: Boolean = false)(content: String)(implicit  env: Env, ec: ExecutionContext, mat: Materializer) = {
+  def documentationPageTemplate(title: String, prefix: String, api: Api, doc: ApiDocumentation, sidebar: ApiDocumentationSidebar, ctx: NgbBackendCallContext, noInnerPadding: Boolean = false)(content: String)(using env: Env, ec: ExecutionContext, mat: Materializer) = {
     val sidebarId = "portalDocSidebar"
     val sidebarHtml =
       s"""<aside class="xl:sticky xl:top-28 xl:self-start">
