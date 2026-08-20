@@ -1,8 +1,7 @@
 package otoroshi_plugins.com.cloud.apim.plugins.apiportal
 
-import next.models.{ApiDocumentation, ApiDocumentationPlan, ApiDocumentationRedirection, ApiDocumentationResource, ApiDocumentationResourceRef, ApiDocumentationSidebar, ApiDocumentationSource}
+import next.models.{ApiDocumentation, ApiDocumentationRedirection, ApiDocumentationResource, ApiDocumentationResourceRef, ApiDocumentationSidebar, ApiDocumentationSource}
 import play.api.libs.json.Json
-import otoroshi.utils.syntax.implicits._
 
 object ApiDocumentationExample {
   val remote = ApiDocumentation(
