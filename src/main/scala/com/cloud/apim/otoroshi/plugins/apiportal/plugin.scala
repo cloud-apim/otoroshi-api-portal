@@ -1,6 +1,6 @@
 package otoroshi_plugins.com.cloud.apim.plugins.apiportal
 
-import next.models.*
+import otoroshi.next.models.*
 import org.apache.pekko.stream.Materializer
 import org.apache.pekko.stream.scaladsl.{Sink, Source}
 import org.apache.pekko.util.ByteString
@@ -178,7 +178,7 @@ class OtoroshiApiPortal extends NgBackendCall {
 }
 
 object OtoroshiApiPortal {
-  def apikeysFromApiForUser(plan: ApiDocumentationPlan, ctx: NgbBackendCallContext)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Seq[(ApiSubscription, ApiKey)]] = {
+  def apikeysFromApiForUser(plan: ApiPlan, ctx: NgbBackendCallContext)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Seq[(ApiSubscription, ApiKey)]] = {
     Source(env.proxyState.allApiSubscriptions().toList)
       .filter(_.planRef == plan.id)
       .filter(_.status == ApiSubscriptionEnabled)

@@ -1,6 +1,6 @@
 package otoroshi_plugins.com.cloud.apim.plugins.apiportal
 
-import next.models.{ApiDocumentation, ApiDocumentationRedirection, ApiDocumentationResource, ApiDocumentationResourceRef, ApiDocumentationSidebar, ApiDocumentationSource}
+import otoroshi.next.models.{ApiDocumentation, ApiDocumentationRedirection, ApiDocumentationResource, ApiDocumentationResourceRef, ApiDocumentationSidebar, ApiDocumentationSource}
 import play.api.libs.json.Json
 
 object ApiDocumentationExample {
