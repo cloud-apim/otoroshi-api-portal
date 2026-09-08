@@ -10,7 +10,7 @@ lazy val root = (project in file("."))
     name := "otoroshi-api-portal",
     scalacOptions ++= Seq("-deprecation", "-feature", "-unchecked"),
     libraryDependencies ++= Seq(
-      "fr.maif" %% "otoroshi" % "18.0.0-preview2" % "provided",
+      "fr.maif" %% "otoroshi" % "18.0.0-preview6" % "provided",
       munit % Test
     )
   )
