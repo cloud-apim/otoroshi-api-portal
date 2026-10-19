@@ -257,22 +257,18 @@ object OtoroshiApiPortalCatalog {
 
   /* ---------- the json of the catalog ---------- */
 
-  def serveSession(catalog: Catalog)(using env: Env, ec: ExecutionContext): Future[Result] = {
-    Results.Ok(Json.obj(
-      "user" -> catalog.ctx.user.map(u => Json.obj("name" -> u.name, "email" -> u.email)),
-      "login_url" -> s"${catalog.prefix}/login",
-      "logout_url" -> s"${catalog.prefix}/logout",
-      // the APIs a key is taken of
-      "apis" -> JsArray(catalog.apis.filter(_.keyPlans.nonEmpty).map { entry =>
-        Json.obj(
-          "slug" -> entry.slug,
-          "name" -> entry.settings.title,
-          "prefix" -> catalog.apiPrefix(entry),
-          "plans" -> JsArray(entry.keyPlans.map(planJson)),
-          "per_user" -> entry.settings.keysPerUser,
-        )
-      }),
-    )).withHeaders("Cache-Control" -> "no-store").vfuture
+  def serveSession(catalog: Catalog)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
+    // the APIs a key is taken of
+    Future.sequence(catalog.apis.filter(_.keyPlans.nonEmpty).map { entry =>
+      OtoroshiApiPortal.keysInfo(catalog.portal(entry)).map(_ ++ Json.obj("slug" -> entry.slug, "prefix" -> catalog.apiPrefix(entry)))
+    }).map { apis =>
+      Results.Ok(Json.obj(
+        "user" -> catalog.ctx.user.map(u => Json.obj("name" -> u.name, "email" -> u.email)),
+        "login_url" -> s"${catalog.prefix}/login",
+        "logout_url" -> s"${catalog.prefix}/logout",
+        "apis" -> JsArray(apis),
+      )).withHeaders("Cache-Control" -> "no-store")
+    }
   }
 
   def serveApis(catalog: Catalog)(using env: Env, ec: ExecutionContext): Future[Result] = {
@@ -292,9 +288,9 @@ object OtoroshiApiPortalCatalog {
   // the keys of the developer, for all the APIs of the catalog
   def serveApikeys(catalog: Catalog, user: PrivateAppsUser)(using env: Env, ec: ExecutionContext): Future[Result] = {
     Future.sequence(catalog.apis.filter(_.keyPlans.nonEmpty).map { entry =>
-      OtoroshiApiPortal.userKeys(catalog.portal(entry), user).map(_.map { key =>
-        key.json ++ Json.obj("api" -> entry.slug, "api_name" -> entry.settings.title, "api_prefix" -> catalog.apiPrefix(entry))
-      })
+      OtoroshiApiPortal.userKeys(catalog.portal(entry), user).flatMap(keys => Future.sequence(keys.map { key =>
+        OtoroshiApiPortal.withUsage(key).map(_ ++ Json.obj("api" -> entry.slug, "api_name" -> entry.settings.title, "api_prefix" -> catalog.apiPrefix(entry)))
+      }))
     }).map(keys => Results.Ok(JsArray(keys.flatten)).withHeaders("Cache-Control" -> "no-store"))
   }
 
@@ -383,7 +379,8 @@ object OtoroshiApiPortalCatalog {
     "keys",
     Some("My keys"),
     """<div class="container narrow"><h1 class="page-title">My keys</h1><p class="lead-small muted">The keys of the APIs of this portal: one to send in each request, <code>Authorization: Bearer …</code>.</p><div id="keys"><p class="muted">Loading…</p></div></div>""",
-    Json.obj("keys" -> true)
+    Json.obj("keys" -> true),
+    markdown = true
   )
 
   def notFoundPage(catalog: Catalog): String = page(

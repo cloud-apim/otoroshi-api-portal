@@ -1176,6 +1176,148 @@ button.button {
   background: color-mix(in srgb, #d1242f 10%, transparent);
   color: var(--fg);
 }
+.panel [hidden] {
+  display: none;
+}
+
+/* ---------- the plans of a new key ---------- */
+
+.plan-picker {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+.plan-picker legend {
+  margin-bottom: 6px;
+  padding: 0;
+  color: var(--fg-soft);
+  font-size: 14px;
+  font-weight: 600;
+}
+.plan-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px;
+}
+.panel label.plan-option {
+  position: relative;
+  gap: 6px;
+  padding: 14px 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  background: var(--bg);
+  font-weight: 400;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
+}
+.panel label.plan-option:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border-strong));
+}
+.panel label.plan-option:has(input:checked) {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 7%, var(--bg));
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.panel label.plan-option:has(input:focus-visible) {
+  outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  outline-offset: 2px;
+}
+.panel .plan-option input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+.plan-name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: var(--fg);
+  font-size: 15px;
+  font-weight: 700;
+}
+.plan-desc {
+  color: var(--fg-soft);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+.plan-quotas {
+  margin-top: auto;
+  padding-top: 6px;
+  border-top: 1px dashed var(--border);
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.panel label.check a {
+  font-weight: 600;
+}
+
+/* ---------- the usage of a key ---------- */
+
+.usage {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  margin-top: 8px;
+}
+.meter {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 150px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.meter strong {
+  color: var(--fg);
+}
+.meter-bar {
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--border);
+}
+.meter-bar i {
+  display: block;
+  height: 100%;
+  min-width: 2px;
+  border-radius: inherit;
+  background: var(--accent);
+}
+.meter.high .meter-bar i {
+  background: #d1242f;
+}
+
+/* ---------- the samples of a key ---------- */
+
+.code.samples {
+  margin: 0;
+}
+.code-head .tabs {
+  display: flex;
+  gap: 2px;
+}
+.code-head .tab {
+  padding: 3px 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: none;
+  cursor: pointer;
+}
+.code-head .tab:hover {
+  color: var(--fg);
+}
+.code-head .tab.active {
+  background: var(--bg-raised);
+  color: var(--fg);
+  box-shadow: 0 0 0 1px var(--border);
+}
 
 /* ---------- small screens ---------- */
 

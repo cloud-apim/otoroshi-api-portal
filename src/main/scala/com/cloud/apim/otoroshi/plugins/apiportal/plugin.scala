@@ -18,7 +18,7 @@ import play.api.libs.json.*
 import play.api.libs.ws.WSBodyWritables.given
 import play.api.mvc.{Result, Results}
 
-import java.net.{URI, URLDecoder}
+import java.net.{URI, URLDecoder, URLEncoder}
 import java.nio.charset.StandardCharsets
 import scala.collection.concurrent.TrieMap
 import scala.concurrent.duration.DurationInt
@@ -200,6 +200,7 @@ object OtoroshiApiPortal {
       case ("get", "/api/apikeys")                                               => signedIn(portal)(user => serveListApikeys(portal, user))
       case ("post", "/api/apikeys")                                              => guarded(portal)(user => serveCreateApikey(portal, user))
       case ("post", path) if path.startsWith("/api/apikeys/") && path.endsWith("/reveal") => guarded(portal)(user => serveRevealApikey(portal, user, idIn(portal.rawPath)))
+      case ("post", path) if path.startsWith("/api/apikeys/") && path.endsWith("/rotate") => guarded(portal)(user => serveRotateApikey(portal, user, idIn(portal.rawPath)))
       case ("put", path) if path.startsWith("/api/apikeys/")                    => guarded(portal)(user => serveUpdateApikey(portal, user, idIn(portal.rawPath)))
       case ("delete", path) if path.startsWith("/api/apikeys/")                 => guarded(portal)(user => serveDeleteApikey(portal, user, idIn(portal.rawPath)))
       case ("get", "/api/plans")                                                 => servePlansJson(portal)
@@ -488,13 +489,81 @@ object OtoroshiApiPortal {
   }
 
   def serveSession(portal: Portal)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
-    Results.Ok(Json.obj(
-      "user" -> portal.user.map(u => Json.obj("name" -> u.name, "email" -> u.email)),
-      "plans" -> JsArray(portal.keyPlans.map(planJson)),
-      "login_url" -> s"${portal.rootPrefix}/login",
-      "logout_url" -> portal.logoutUrl,
-      "per_user" -> portal.settings.keysPerUser,
-    )).withHeaders("Cache-Control" -> "no-store").vfuture
+    keysInfo(portal).map { info =>
+      Results.Ok(info ++ Json.obj(
+        "user" -> portal.user.map(u => Json.obj("name" -> u.name, "email" -> u.email)),
+        "login_url" -> s"${portal.rootPrefix}/login",
+        "logout_url" -> portal.logoutUrl,
+      )).withHeaders("Cache-Control" -> "no-store")
+    }
+  }
+
+  /**
+   * What a developer needs to take a key of the API and use it: its plans, the terms they accept, the reason they are
+   * asked, and where to send a first request (the gateway, a request of its specification).
+   */
+  def keysInfo(portal: Portal)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[JsObject] = {
+    sampleRequest(portal).map { sample =>
+      Json.obj(
+        "name" -> portal.settings.title,
+        "plans" -> JsArray(portal.keyPlans.map(planJson)),
+        "per_user" -> portal.settings.keysPerUser,
+        "reason" -> portal.settings.keysReason,
+        "terms" -> portal.settings.terms.map(portal.href),
+        "gateway" -> portal.gatewayUrl,
+        "sample" -> sample,
+      )
+    }
+  }
+
+  private val specCache = new TrieMap[String, (Long, Option[(JsObject, Option[String])])]()
+
+  // the specifications, kept a minute (the samples of the keys, the hosts of the requests of the reference)
+  def cachedSpec(portal: Portal, link: String)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Option[(JsObject, Option[String])]] = {
+    val key = s"${portal.api.id}:$link:${Json.stringify(portal.doc.json).hashCode}"
+    val now = System.currentTimeMillis()
+    specCache.get(key) match {
+      case Some((at, spec)) if at > now - 60000L => spec.vfuture
+      case _ => loadSpec(portal, link).map { spec =>
+        specCache.filterInPlace { case (_, (at, _)) => at > now - 60000L }
+        specCache.put(key, (now, spec))
+        spec
+      }
+    }
+  }
+
+  /**
+   * A first request to send with a key: the `portal.sample_path` of the documentation, or the first GET of its first
+   * specification without a path parameter, its required query parameters given their example (or default) value.
+   */
+  def sampleRequest(portal: Portal)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Option[String]] = {
+    portal.settings.samplePath match {
+      case Some(path) => Some(path).vfuture
+      case None => specLinks(portal).headOption match {
+        case None => None.vfuture
+        case Some(link) => cachedSpec(portal, link).map(_.flatMap { case (spec, _) =>
+          spec.select("paths").asOpt[JsObject].flatMap { paths =>
+            paths.value.collectFirst {
+              case (path, item: JsObject) if !path.contains("{") && item.select("get").asOpt[JsObject].isDefined =>
+                val params = (item.select("parameters").asOpt[Seq[JsObject]].getOrElse(Seq.empty) ++ item.select("get").select("parameters").asOpt[Seq[JsObject]].getOrElse(Seq.empty))
+                  .filter(p => p.select("in").asOpt[String].contains("query") && p.select("required").asOpt[Boolean].contains(true))
+                  .flatMap { p =>
+                    val value = p.select("example").asOpt[JsValue]
+                      .orElse(p.select("schema").select("example").asOpt[JsValue])
+                      .orElse(p.select("schema").select("default").asOpt[JsValue])
+                      .orElse(p.select("schema").select("enum").asOpt[Seq[JsValue]].flatMap(_.headOption))
+                      .map {
+                        case JsString(v) => v
+                        case other => Json.stringify(other)
+                      }
+                    for { name <- p.select("name").asOpt[String]; v <- value } yield s"${URLEncoder.encode(name, StandardCharsets.UTF_8)}=${URLEncoder.encode(v, StandardCharsets.UTF_8)}"
+                  }
+                if (params.isEmpty) path else s"$path?${params.mkString("&")}"
+            }
+          }
+        })
+      }
+    }
   }
 
   /* ---------- the keys of the developers ---------- */
@@ -580,7 +649,22 @@ object OtoroshiApiPortal {
   }
 
   def serveListApikeys(portal: Portal, user: PrivateAppsUser)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
-    userKeys(portal, user).map(keys => Results.Ok(JsArray(keys.map(_.json))).withHeaders("Cache-Control" -> "no-store"))
+    userKeys(portal, user)
+      .flatMap(keys => Future.sequence(keys.map(withUsage)))
+      .map(keys => Results.Ok(JsArray(keys)).withHeaders("Cache-Control" -> "no-store"))
+  }
+
+  /** A key, with the calls it made today and this month, and its quotas (none when unlimited). */
+  def withUsage(userKey: UserKey)(using env: Env, ec: ExecutionContext): Future[JsObject] = userKey.key match {
+    case Some(key) if !userKey.waiting =>
+      key.remainingQuotas().map { quotas =>
+        val allowed = key.allowedQuota
+        userKey.json ++ Json.obj("usage" -> Json.obj(
+          "daily" -> Json.obj("used" -> quotas.currentCallsPerDay, "limit" -> quotaValue(allowed.daily)),
+          "monthly" -> Json.obj("used" -> quotas.currentCallsPerMonth, "limit" -> quotaValue(allowed.monthly)),
+        ))
+      }.recover { case _ => userKey.json }
+    case _ => userKey.json.vfuture
   }
 
   /**
@@ -593,8 +677,15 @@ object OtoroshiApiPortal {
       val name = body.select("name").asOpt[String].map(_.trim.take(80)).filter(_.nonEmpty).getOrElse("My key")
       val description = body.select("description").asOpt[String].map(_.trim.take(500)).getOrElse("")
       val planId = body.select("plan").asOpt[String]
+      // (on one line: the admin who approves reads it in the metadata of the subscription)
+      val reason = body.select("reason").asOpt[String].map(_.replaceAll("\\s+", " ").trim.take(1000)).filter(_.nonEmpty).filter(_ => portal.settings.keysReason != "none")
+      val terms = portal.settings.terms
       portal.keyPlans.find(p => planId.contains(p.id)) match {
         case None => jsonError(Results.BadRequest, "no such plan on this portal")
+        case Some(_) if terms.isDefined && !body.select("accept_terms").asOpt[Boolean].contains(true) =>
+          jsonError(Results.BadRequest, "accept the terms of use to take a key")
+        case Some(plan) if reason.isEmpty && (portal.settings.keysReason == "required" || (portal.settings.keysReason == "manual" && !plan.validation.isAuto)) =>
+          jsonError(Results.BadRequest, "say why you need this key")
         case Some(plan) => userKeys(portal, user).flatMap { keys =>
           if (portal.settings.keysPerUser.exists(keys.size >= _)) {
             jsonError(Results.BadRequest, s"${portal.settings.keysPerUser.get} keys at most: revoke one to take another")
@@ -617,7 +708,7 @@ object OtoroshiApiPortal {
               metadata = Map(
                 "created_by" -> "otoroshi-api-portal-plugin",
                 "otoroshi-api-client-name" -> name,
-              )
+              ) ++ reason.map(r => "portal-reason" -> r) ++ terms.toSeq.flatMap(t => Seq("portal-terms" -> t, "portal-terms-accepted-at" -> now.toString()))
             )
             ApiSubscription.validate(api.id, sub, WriteAction.Create, isDraft = false).flatMap {
               case Left(error) => jsonError(Results.BadRequest, error)
@@ -645,6 +736,17 @@ object OtoroshiApiPortal {
   def serveRevealApikey(portal: Portal, user: PrivateAppsUser, id: String)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
     findUserKey(portal, user, id).flatMap {
       case Some(userKey) if !userKey.waiting => Results.Ok(userKey.json ++ Json.obj("bearer" -> userKey.key.map(_.toBearer()))).withHeaders("Cache-Control" -> "no-store").vfuture
+      case Some(_) => jsonError(Results.BadRequest, "this key waits an approval")
+      case None => jsonError(Results.NotFound, "no such key")
+    }
+  }
+
+  /** A new secret for a key: the requests sent with the previous one are refused from now on. */
+  def serveRotateApikey(portal: Portal, user: PrivateAppsUser, id: String)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
+    findUserKey(portal, user, id).flatMap {
+      case Some(userKey @ UserKey(_, Some(key), _)) if !userKey.waiting =>
+        val rotated = key.copy(clientSecret = IdGenerator.lowerCaseToken(64))
+        saveKey(rotated).map(_ => Results.Ok(userKey.copy(key = Some(rotated)).json ++ Json.obj("bearer" -> rotated.toBearer())).withHeaders("Cache-Control" -> "no-store"))
       case Some(_) => jsonError(Results.BadRequest, "this key waits an approval")
       case None => jsonError(Results.NotFound, "no such key")
     }

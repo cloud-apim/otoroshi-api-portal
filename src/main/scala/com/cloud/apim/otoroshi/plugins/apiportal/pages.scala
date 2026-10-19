@@ -55,6 +55,11 @@ object PortalAssets {
  *   - `portal.reference.gateway_server`: `false` to keep only the servers of the specifications, not the one of the
  *     Otoroshi gateway put first
  *   - `portal.keys.per_user`: how many keys a developer can take
+ *   - `portal.keys.reason`: asking why a developer takes a key, `optional` (default), `required`, `manual` (required for
+ *     the plans validated by hand) or `none`
+ *   - `portal.terms`: the address of the terms of use a developer accepts before taking a key
+ *   - `portal.sample_path`: the request of the code samples of a key (`/pets?status=available`), the first GET of the
+ *     specification by default
  */
 case class PortalSettings(
     title: String,
@@ -68,7 +73,10 @@ case class PortalSettings(
     referenceClient: Boolean,
     referenceModels: Boolean,
     gatewayServer: Boolean,
-    keysPerUser: Option[Int]
+    keysPerUser: Option[Int],
+    keysReason: String = "optional",
+    terms: Option[String] = None,
+    samplePath: Option[String] = None
 ) {
   def locked: Boolean = !toggle && theme != "system"
 }
@@ -107,7 +115,10 @@ object PortalSettings {
       referenceClient = bool("portal.reference.client", true),
       referenceModels = bool("portal.reference.models", true),
       gatewayServer = bool("portal.reference.gateway_server", true),
-      keysPerUser = text("portal.keys.per_user").flatMap(_.toIntOption).filter(_ > 0)
+      keysPerUser = text("portal.keys.per_user").flatMap(_.toIntOption).filter(_ > 0),
+      keysReason = oneOf("portal.keys.reason", Seq("optional", "required", "manual", "none"), "optional"),
+      terms = text("portal.terms").filter(t => t.startsWith("https://") || t.startsWith("http://") || t.startsWith("/")),
+      samplePath = text("portal.sample_path").filter(_.startsWith("/"))
     )
   }
 }
@@ -601,7 +612,8 @@ object PortalPages {
     "keys",
     Some("My keys"),
     """<div class="container narrow"><h1 class="page-title">My keys</h1><p class="lead-small muted">The keys of this API: one to send in each request, <code>Authorization: Bearer …</code>.</p><div id="keys"><p class="muted">Loading…</p></div></div>""",
-    Json.obj("keys" -> true)
+    Json.obj("keys" -> true),
+    markdown = true
   )
 
   def notFoundPage(portal: Portal): String = layout(

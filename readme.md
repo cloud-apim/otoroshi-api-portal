@@ -20,7 +20,8 @@ If you expose APIs through Otoroshi and need a developer-facing portal, you typi
 - API reference (via [Scalar](https://github.com/scalar/scalar)), one or several specifications (JSON or YAML)
 - Try it: requests sent from the reference through the portal (no CORS), to the hosts of the API only, with the key of the developer
 - The gateway of the API added as the first server of the specifications, the API keys of the developers as their security scheme
-- Self-service API keys: take a key of a plan, show it, rename it, disable it, revoke it; plans validated by hand wait for an approval (confirmed in Otoroshi)
+- Self-service API keys: pick a plan among cards (its quotas, how the key is given), say why, accept the terms of use, then show the key (masked until asked), copy it, see its usage today and this month, rotate its secret, rename it, disable it, revoke it; plans validated by hand wait for an approval (confirmed in Otoroshi)
+- Ready-to-paste first requests for a key (curl, JavaScript, Python), to the gateway of the API
 - Remote content loading (documentation pages and resources fetched from URLs)
 - Remote portal configuration (load the entire `documentation` section from a URL)
 - Redirections, banner, footer, links in the top bar
@@ -258,6 +259,9 @@ The look of the portal is set in the `metadata` of the documentation, all option
 | `portal.reference.models` | `true` | `false` hides the models |
 | `portal.reference.gateway_server` | `true` | `false` keeps only the servers of the specifications (see [API reference](#api-reference-and-try-it)) |
 | `portal.keys.per_user` | unlimited | How many keys a developer can take |
+| `portal.keys.reason` | `optional` | Asking why a developer takes a key: `optional`, `required`, `manual` (required for the plans validated by hand) or `none` |
+| `portal.terms` | none | The terms of use (an address, or a path of the documentation like `/docs/terms`): a developer accepts them before taking a key |
+| `portal.sample_path` | the first GET of the specification | The request of the code samples of a key, like `/pets?status=available` |
 
 ### Remote source
 
@@ -379,7 +383,9 @@ The published plans are shown on the home, with their quotas. Plans with `access
 
 A signed in developer takes a key of a plan in **My keys**: the portal creates a subscription to the plan (`apis.otoroshi.io/ApiSubscription`, owned by the email of the developer), and Otoroshi creates its API key from the plan (its quotas, its tags, its metadata). With an `auto` plan, the key works at once and the portal shows it. With a `manual` plan, the subscription is `pending` and its key disabled until the subscription is confirmed in Otoroshi.
 
-The developer then shows a key again, renames it, disables it, or revokes it (its subscription and its key deleted). They only ever see and change their own keys.
+The plans are shown as cards: their description, their quotas, and whether the key comes at once or on approval. The reason the developer gives (`portal.keys.reason`) and their acceptance of the terms of use (`portal.terms`) are kept in the metadata of the subscription, where the admin who approves it reads them: `portal-reason` (on one line), `portal-terms` and `portal-terms-accepted-at`.
+
+The developer then sees, for each key, its calls today and this month against the quotas of its plan, and can show the key again (masked until asked), get ready-to-paste first requests with it (curl, JavaScript, Python, to the gateway of the API), rotate its secret (the previous one is refused within seconds), rename it, disable it, or revoke it (its subscription and its key deleted). They only ever see and change their own keys.
 
 ### Redirection
 
@@ -570,13 +576,14 @@ The portal exposes the following routes internally:
 | `GET` | `/keys` | The keys of the developer (`/subscriptions` redirects there) |
 | `GET` | `/_portal/<file>` | The files of the portal (`portal.css`, `portal.js`, `theme.js`) |
 | `GET` | `/<resource-path>` | Any resource defined in the documentation |
-| `GET` | `/api/session` | JSON: the signed in developer, the plans they take keys of |
+| `GET` | `/api/session` | JSON: the signed in developer, the plans they take keys of, the terms, the reason asked, the gateway and a sample request |
 | `GET` | `/api/plans` | JSON list of the plans shown on the portal |
 | `GET` | `/api/documentation` | JSON documentation metadata |
 | `GET` | `/api/openapi?link=<link>` | A specification, as the reference reads it (gateway server, security scheme) |
-| `GET` | `/api/apikeys` | JSON list of the keys of the developer (never their secrets) |
-| `POST` | `/api/apikeys` | Take a key: `{ "name", "description", "plan" }` |
+| `GET` | `/api/apikeys` | JSON list of the keys of the developer, with their usage (never their secrets) |
+| `POST` | `/api/apikeys` | Take a key: `{ "name", "description", "plan", "reason", "accept_terms" }` |
 | `POST` | `/api/apikeys/<id>/reveal` | The bearer token of a key |
+| `POST` | `/api/apikeys/<id>/rotate` | A new secret for a key: its new bearer token |
 | `PUT` | `/api/apikeys/<id>` | Update a key: `{ "name", "description", "enabled" }` |
 | `DELETE` | `/api/apikeys/<id>` | Revoke a key |
 | any | `/api/_proxy?scalar_url=<url>` | The requests of the reference, to the hosts of the API only |

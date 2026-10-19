@@ -190,15 +190,35 @@
 
   /* ---------- the keys of the developer ---------- */
 
-  const quotaValue = (n) => (n === null || n === undefined ? 'unlimited' : Number(n).toLocaleString('en'));
-  const quotaOf = (q) =>
-    q
-      ? [q.daily != null ? `${quotaValue(q.daily)} a day` : '', q.monthly != null ? `${quotaValue(q.monthly)} a month` : ''].filter(Boolean).join(', ') || 'no quota'
-      : 'no quota';
+  const count = (n) => Number(n).toLocaleString('en');
+  const quotaValue = (n) => (n === null || n === undefined ? 'unlimited' : count(n));
+  // the variable a key is put in, in the samples: PETSTORE_KEY
+  const envOf = (name) => `${String(name || 'API').toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'API'}_KEY`;
+  const LANGUAGES = { curl: ['bash', 'curl'], javascript: ['javascript', 'JavaScript'], python: ['python', 'Python'] };
+
+  // a first request with a key, in a few languages: to the gateway of the API, the key in a variable
+  const samplesOf = (api) => {
+    if (!api?.gateway) return null;
+    const url = api.gateway + (api.sample || '/');
+    const env = envOf(api.name);
+    return {
+      env,
+      curl: `curl "${url}" \\\n  -H "Authorization: Bearer $${env}"`,
+      javascript: `const res = await fetch('${url}', {\n  headers: { Authorization: \`Bearer \${process.env.${env}}\` },\n});\nconsole.log(await res.json());`,
+      python: `import os\nimport requests\n\nres = requests.get(\n    "${url}",\n    headers={"Authorization": f"Bearer {os.environ['${env}']}"},\n)\nprint(res.json())`,
+    };
+  };
+
+  // the calls of a key today and this month, against its quotas
+  const meter = (label, usage) => {
+    if (!usage) return '';
+    const percent = usage.limit ? Math.min(100, Math.round((usage.used / usage.limit) * 100)) : 0;
+    return `<div class="meter${percent >= 90 ? ' high' : ''}"><span>${label} <strong>${count(usage.used)}</strong>${usage.limit ? ` / ${count(usage.limit)}` : ''}</span>${usage.limit ? `<span class="meter-bar"><i style="width:${percent}%"></i></span>` : ''}</div>`;
+  };
 
   function mountKeys(mount) {
     // (the API of a new key, in a catalog: the one of ?api=<slug>, or the first one)
-    let state = { session: null, keys: [], made: null, editing: null, notice: null, error: null, busy: false, chosenApi: new URLSearchParams(location.search).get('api') };
+    let state = { session: null, keys: [], made: null, editing: null, notice: null, error: null, busy: false, chosenApi: new URLSearchParams(location.search).get('api'), sample: 'curl' };
 
     const render = () => {
       const { session, keys, made, editing, notice, error, busy } = state;
@@ -208,7 +228,9 @@
       }
       // the APIs the keys are taken of: the one of the portal, or the ones of the catalog
       const multi = Array.isArray(session.apis);
-      const apis = multi ? session.apis : [{ prefix, name: null, plans: session.plans || [], per_user: session.per_user }];
+      const apis = multi
+        ? session.apis
+        : [{ prefix, slug: null, name: session.name, plans: session.plans || [], per_user: session.per_user, reason: session.reason, terms: session.terms, gateway: session.gateway, sample: session.sample }];
       const offered = apis.flatMap((api) => api.plans.map((plan) => ({ api, plan })));
       const apiOf = (k) => (multi ? apis.find((a) => a.prefix === k.api_prefix) : apis[0]);
       const planOf = (k) => apiOf(k)?.plans.find((p) => p.id === k.plan);
@@ -224,18 +246,35 @@ ${offered.length ? `<div class="chips">${offered.map((o) => `<span class="badge 
         return;
       }
       const full = perUser && keys.length >= perUser;
-      // the plans to take a key of: in a catalog, the ones of the API chosen first
       const keyApis = apis.filter((a) => a.plans.length);
       const chosenApi = keyApis.find((a) => a.slug === state.chosenApi) || keyApis[0];
-      const option = (o, i) => `<option value="${i}">${escapeHtml(o.plan.name)} — ${escapeHtml(quotaOf(o.plan.quotas))}${o.plan.validation === 'auto' ? '' : ' (on approval)'}</option>`;
-      const planOptions = (api) => offered.map((o, i) => (!multi || o.api === api ? option(o, i) : '')).join('');
+
+      // the plans of an API to take a key of, each a card; the reason asked, the terms accepted
+      const planCard = (o, i, checked) => {
+        const q = o.plan.quotas || {};
+        const facts = [q.daily != null ? `${quotaValue(q.daily)} a day` : '', q.monthly != null ? `${quotaValue(q.monthly)} a month` : '', q.window != null ? `bursts of ${quotaValue(q.window)}` : ''].filter(Boolean);
+        return `<label class="plan-option"><input type="radio" name="plan" value="${i}"${checked ? ' checked' : ''}>
+<span class="plan-name">${escapeHtml(o.plan.name)} ${o.plan.validation === 'auto' ? '<span class="badge success">Key at once</span>' : '<span class="badge warning">On approval</span>'}</span>
+${o.plan.description ? `<span class="plan-desc">${escapeHtml(o.plan.description)}</span>` : ''}
+<span class="plan-quotas">${escapeHtml(facts.length ? facts.join(' · ') : 'No quota')}</span>
+</label>`;
+      };
+      const apiFields = (api) => {
+        const plans = offered.map((o, i) => [o, i]).filter(([o]) => o.api === api);
+        return `<fieldset class="plan-picker"><legend>Plan</legend><div class="plan-options">${plans.map(([o, i], n) => planCard(o, i, n === 0)).join('')}</div></fieldset>
+<label id="reason-field"${api.reason === 'none' ? ' hidden' : ''}><span>Why do you need this key? <span class="muted" id="reason-optional">(optional)</span></span><textarea name="reason" maxlength="1000" placeholder="What you build with it, and for whom"></textarea></label>
+${api.terms ? `<label class="check"><input type="checkbox" name="terms" required><span>I accept the <a href="${escapeHtml(api.terms)}" target="_blank" rel="noopener noreferrer">terms of use</a>${multi ? ` of ${escapeHtml(api.name)}` : ''}</span></label>` : ''}`;
+      };
+
       const keyRow = (k) => {
         const waiting = k.status !== 'validated';
-        const actions = `${waiting ? '' : `<button type="button" class="button small" data-reveal="${escapeHtml(k.id)}">Show key</button>`}<button type="button" class="button small" data-edit="${escapeHtml(k.id)}">Edit</button><button type="button" class="button small danger" data-revoke="${escapeHtml(k.id)}">${waiting ? 'Cancel' : 'Revoke'}</button>`;
+        const actions = `${waiting ? '' : `<button type="button" class="button small" data-reveal="${escapeHtml(k.id)}">Show key</button><button type="button" class="button small" data-rotate="${escapeHtml(k.id)}">Rotate</button>`}<button type="button" class="button small" data-edit="${escapeHtml(k.id)}">Edit</button><button type="button" class="button small danger" data-revoke="${escapeHtml(k.id)}">${waiting ? 'Cancel' : 'Revoke'}</button>`;
         const since = k.created_at ? ` · since ${escapeHtml(new Date(k.created_at).toLocaleDateString())}` : '';
-        return `<li><div><strong>${escapeHtml(k.name)}</strong>${waiting ? ' <span class="badge warning">Waiting approval</span>' : k.enabled ? '' : ' <span class="badge">Off</span>'}<div class="muted small">${multi ? `${escapeHtml(k.api_name)} · ` : ''}${escapeHtml(planOf(k)?.name || k.plan_name || k.plan)}${since}</div>${k.description ? `<div class="muted small">${escapeHtml(k.description)}</div>` : ''}</div><div class="row">${actions}</div></li>`;
+        const usage = k.usage ? `<div class="usage">${meter('Today', k.usage.daily)}${meter('This month', k.usage.monthly)}</div>` : '';
+        return `<li><div><strong>${escapeHtml(k.name)}</strong>${waiting ? ' <span class="badge warning">Waiting approval</span>' : k.enabled ? '' : ' <span class="badge">Off</span>'}<div class="muted small">${multi ? `${escapeHtml(k.api_name)} · ` : ''}${escapeHtml(planOf(k)?.name || k.plan_name || k.plan)}${since}</div>${k.description ? `<div class="muted small">${escapeHtml(k.description)}</div>` : ''}${usage}</div><div class="row">${actions}</div></li>`;
       };
       const editingKey = keys.find((k) => k.id === editing);
+      const samples = made ? samplesOf(apiOf(made)) : null;
       mount.innerHTML = `<div class="who"><span class="muted">Signed in as</span> <strong>${escapeHtml(session.user.email)}</strong> <a href="${escapeHtml(session.logout_url)}">Sign out</a></div>
 ${error ? `<div class="notice error">${escapeHtml(error)}</div>` : ''}
 ${notice ? `<div class="notice">${escapeHtml(notice)}</div>` : ''}
@@ -245,6 +284,12 @@ ${
 <h3>${escapeHtml(made.name)}: your key</h3>
 <p class="muted">Keep it secret: <em>Show key</em> shows it again, to you only. Send it in each request, <code>Authorization: Bearer …</code>, or pick it in the API reference.</p>
 <div class="token"><input type="password" id="token" value="${escapeHtml(made.bearer)}" readonly autocomplete="off" spellcheck="false" aria-label="The key" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"><button type="button" class="button small" id="show-token">Show</button><button type="button" class="button small" id="copy">Copy</button></div>
+${
+  samples
+    ? `<p class="muted small">A first request: put the key in <code>${escapeHtml(samples.env)}</code>, then</p>
+<div class="code samples"><div class="code-head"><span class="tabs">${Object.entries(LANGUAGES).map(([id, [, label]]) => `<button type="button" class="tab${id === state.sample ? ' active' : ''}" data-sample="${id}">${label}</button>`).join('')}</span><button type="button" class="copy" id="copy-sample">Copy</button></div><pre><code class="hljs" id="sample"></code></pre></div>`
+    : ''
+}
 <div class="row"><a class="button small primary" href="${escapeHtml(made.api_prefix ?? prefix)}/api-references" id="use">Use it in the reference</a><button type="button" class="button small" id="done">Done</button></div>
 </div>`
     : ''
@@ -271,29 +316,35 @@ ${
       ? `<div class="panel"><p class="muted">${perUser} key${perUser > 1 ? 's' : ''} at most: revoke one to take another.</p></div>`
       : `<form class="panel" id="new-key">
 <h3>A new key</h3>
-<label>Name<input name="name" required maxlength="80" placeholder="My app" autocomplete="off"></label>
-<label>Description<input name="description" maxlength="500" placeholder="What it is for (optional)" autocomplete="off"></label>
+<label>Name<input name="name" required maxlength="80" placeholder="My app" autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"></label>
+<label>Description<input name="description" maxlength="500" placeholder="What it is for (optional)" autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"></label>
 ${multi ? `<label>API<select name="api">${keyApis.map((a) => `<option value="${escapeHtml(a.slug)}"${a === chosenApi ? ' selected' : ''}>${escapeHtml(a.name)}</option>`).join('')}</select></label>` : ''}
-<label>Plan<select name="plan">${planOptions(chosenApi)}</select></label>
-<p class="hint" id="plan-help"></p>
+<div id="api-fields">${apiFields(chosenApi)}</div>
 <div><button type="submit" class="button primary" id="take"${busy ? ' disabled' : ''}></button></div>
 </form>`
 }`;
-      // the button says what happens: a key at once, or a request to approve
+      // the form says what happens: a key at once, or a request to approve (a reason then asked, when the portal says so)
       const form = mount.querySelector('#new-key');
-      const label = () => {
-        const p = offered[Number(form.plan.value)]?.plan;
-        mount.querySelector('#take').textContent = busy ? 'One moment…' : p && p.validation !== 'auto' ? 'Request a key' : 'Take a key';
-        mount.querySelector('#plan-help').textContent = p?.description || '';
+      const refresh = () => {
+        const o = offered[Number(form.elements.plan.value)];
+        const mode = o?.api.reason || 'optional';
+        const required = mode === 'required' || (mode === 'manual' && o?.plan.validation !== 'auto');
+        form.elements.reason.required = required;
+        mount.querySelector('#reason-optional').hidden = required;
+        mount.querySelector('#take').textContent = busy ? 'One moment…' : o && o.plan.validation !== 'auto' ? 'Request a key' : 'Take a key';
       };
       if (form) {
-        label();
-        form.plan.addEventListener('change', label);
-        // (another API: its plans, the name and description typed kept)
+        refresh();
+        form.addEventListener('change', (e) => {
+          if (e.target.name === 'plan') refresh();
+        });
+        // (another API: its plans, its reason and terms; the name, description and reason typed kept)
         form.elements.api?.addEventListener('change', () => {
+          const reason = form.elements.reason.value;
           state = { ...state, chosenApi: form.elements.api.value };
-          form.plan.innerHTML = planOptions(keyApis.find((a) => a.slug === state.chosenApi));
-          label();
+          mount.querySelector('#api-fields').innerHTML = apiFields(keyApis.find((a) => a.slug === state.chosenApi));
+          form.elements.reason.value = reason;
+          refresh();
         });
       }
       // the key hidden until asked
@@ -305,11 +356,29 @@ ${multi ? `<label>API<select name="api">${keyApis.map((a) => `<option value="${e
       mount.querySelector('#copy')?.addEventListener('click', (e) => {
         navigator.clipboard?.writeText(made.bearer).then(() => (e.target.textContent = 'Copied'));
       });
+      // the samples of the key, in the language chosen
+      const sample = mount.querySelector('#sample');
+      if (sample && samples) {
+        const show = (id) => {
+          state = { ...state, sample: id };
+          const [language] = LANGUAGES[id];
+          sample.innerHTML = window.hljs ? window.hljs.highlight(samples[id], { language, ignoreIllegals: true }).value : escapeHtml(samples[id]);
+          mount.querySelectorAll('[data-sample]').forEach((t) => t.classList.toggle('active', t.dataset.sample === id));
+        };
+        show(state.sample);
+        mount.querySelectorAll('[data-sample]').forEach((t) => t.addEventListener('click', () => show(t.dataset.sample)));
+        mount.querySelector('#copy-sample').addEventListener('click', (e) => {
+          navigator.clipboard?.writeText(samples[state.sample]).then(() => {
+            e.target.textContent = 'Copied';
+            setTimeout(() => (e.target.textContent = 'Copy'), 1200);
+          });
+        });
+      }
       mount.querySelector('#use')?.addEventListener('click', () => {
         remember(tokenKey(made.api_prefix ?? prefix), made.bearer);
         remember(keyIdKey(made.api_prefix ?? prefix), made.id);
       });
-      mount.querySelector('#done')?.addEventListener('click', () => update({ made: null }));
+      mount.querySelector('#done')?.addEventListener('click', () => update({ made: null, notice: null }));
       mount.querySelector('#cancel-edit')?.addEventListener('click', () => update({ editing: null }));
       mount.querySelectorAll('[data-edit]').forEach((b) => b.addEventListener('click', () => update({ editing: b.dataset.edit, made: null, notice: null, error: null })));
       // a key of the developer, and the portal of its API
@@ -341,6 +410,20 @@ ${multi ? `<label>API<select name="api">${keyApis.map((a) => `<option value="${e
           }
         })
       );
+      // a new secret: the key shown again, the one of the reference updated
+      mount.querySelectorAll('[data-rotate]').forEach((b) =>
+        b.addEventListener('click', async () => {
+          const k = keyOf(b.dataset.rotate);
+          if (!confirm(`Give ${k.name} a new secret? The requests sent with the current one are refused within a few seconds.`)) return;
+          try {
+            const rotated = await callAt(at(k), 'POST', `/api/apikeys/${encodeURIComponent(k.id)}/rotate`);
+            if (remembered(keyIdKey(at(k))) === k.id) remember(tokenKey(at(k)), rotated.bearer);
+            update({ made: { ...k, ...rotated }, notice: `${k.name} has a new secret: put it in your apps, the previous one no longer works.`, editing: null, error: null });
+          } catch (err) {
+            update({ error: err.message });
+          }
+        })
+      );
       mount.querySelector('#edit-key')?.addEventListener('submit', async (e) => {
         e.preventDefault();
         const values = new FormData(e.target);
@@ -366,6 +449,8 @@ ${multi ? `<label>API<select name="api">${keyApis.map((a) => `<option value="${e
             name: String(values.get('name') || '').trim(),
             description: String(values.get('description') || '').trim(),
             plan: plan.id,
+            reason: String(values.get('reason') || '').trim(),
+            accept_terms: values.get('terms') === 'on',
           });
           const key = multi ? { ...created, api: api.slug, api_name: api.name, api_prefix: api.prefix } : created;
           const keys = [...state.keys, key];
