@@ -2,21 +2,25 @@ package otoroshi_plugins.com.cloud.apim.plugins.apiportal
 
 import otoroshi.next.models.*
 import org.apache.pekko.stream.Materializer
-import org.apache.pekko.stream.scaladsl.{Sink, Source}
 import org.apache.pekko.util.ByteString
 import org.joda.time.DateTime
+import otoroshi.api.WriteAction
 import otoroshi.cluster.ClusterAgent
 import otoroshi.env.Env
-import otoroshi.models.{ApiIdentifier, ApiKey, RemainingQuotas}
+import otoroshi.models.{ApiKey, PrivateAppsUser}
 import otoroshi.next.plugins.api.*
 import otoroshi.next.proxy.NgProxyEngineError
 import otoroshi.security.IdGenerator
 import otoroshi.utils.syntax.implicits.*
+import otoroshi.utils.yaml.Yaml
+import play.api.http.HttpEntity
 import play.api.libs.json.*
-import play.api.libs.ws.WSBodyReadables.given
 import play.api.libs.ws.WSBodyWritables.given
 import play.api.mvc.{Result, Results}
 
+import java.net.{URI, URLDecoder}
+import java.nio.charset.StandardCharsets
+import scala.collection.concurrent.TrieMap
 import scala.concurrent.duration.DurationInt
 import scala.concurrent.{ExecutionContext, Future}
 import scala.util.*
@@ -34,14 +38,12 @@ import scala.util.*
  * - [x] une api peut avoir plusieur openapi (par version)
  *   - [x] il va falloir une sorte de selecteur dans redoc
  * - [ ] handle search
- * - [ ] handle footer
- * - [ ] handle banner
- * - [ ] tester
- *   - API
- *   - Page
- * - Subscription
- *   - API apikeys (crud)
- *   - Page apikeys
+ * - [x] handle footer
+ * - [x] handle banner
+ * - [x] tester (the client of the reference, through /api/_proxy)
+ * - [x] Subscription
+ *   - [x] API apikeys (crud)
+ *   - [x] Page apikeys
  *
  */
 
@@ -110,7 +112,7 @@ class OtoroshiApiPortal extends NgBackendCall {
 
   override def name: String = "Otoroshi API Portal"
 
-  override def description: Option[String] = "This plugin serve some kind of simple API dev portal.".some
+  override def description: Option[String] = "This plugin serves a developer portal for an API: its documentation, its API reference with a client to try it, and the API keys of its developers.".some
 
   override def defaultConfigObject: Option[NgPluginConfig] = OtoroshiApiPortalConfig.default.some
 
@@ -146,822 +148,307 @@ class OtoroshiApiPortal extends NgBackendCall {
           .applyOnIf(api.metadata.get("doc_template").contains("remote_wines"))(_.copy(documentation = ApiDocumentationExample.remoteWines.some))
           .applyOnIf(api.metadata.get("doc_template").contains("test"))(_.copy(documentation = ApiDocumentationExample.value.some))
           .resolveDocumentation() flatMap {
-            case Some(doc) if doc.enabled => {
-              val prefix = config.prefix.getOrElse("")
-              val path = ctx.request.path.replaceFirst(prefix, "").toLowerCase()
-              (ctx.request.method.toLowerCase(), path) match {
-                case ("put", path) if path.startsWith("/api/apikeys/") => OtoroshiApiPortal.serveUpdateApikey(api, path.replaceFirst("/api/apikeys/", ""), ctx, config).asBackendCall
-                case ("delete", path) if path.startsWith("/api/apikeys/") => OtoroshiApiPortal.serveDeleteApikey(api, path.replaceFirst("/api/apikeys/", ""), ctx, config).asBackendCall
-                case ("post", "/api/apikeys") => OtoroshiApiPortal.serveCreateApikey(api, ctx, config).asBackendCall
-                case ("get",  "/api/apikeys") => OtoroshiApiPortal.serveAllApikeys(api, ctx, config).asBackendCall
-                case ("post", "/api/_test") => OtoroshiApiPortal.serveApiTester(api, ctx, config).asBackendCall
-                case ("get", "/api/plans") => OtoroshiApiPortal.servePlansJson(api, doc, ctx, config).asBackendCall
-                case ("get", "/api/documentation") => OtoroshiApiPortal.serveDocumentationJson(api, doc, ctx, config).asBackendCall
-                /////////////////////
-                case ("get", "/subscriptions/apikeys") => OtoroshiApiPortal.serveApikeysPage(api, doc, ctx, config).asBackendCall
-                case ("get", "/subscriptions") => OtoroshiApiPortal.serveApikeysPage(api, doc, ctx, config).asBackendCall
-                case ("get", "/portal.js") => OtoroshiApiPortal.serverJs(api, ctx, config).asBackendCall
-                case ("get", path) if path.startsWith("/api-references/") => OtoroshiApiPortal.serveApiDoc(api, doc, Some(path.replaceFirst("/api-references", "")), ctx, config).asBackendCall
-                case ("get", "/api-references") => OtoroshiApiPortal.serveApiDoc(api, doc, None, ctx, config).asBackendCall
-                case ("get", "/login") => OtoroshiApiPortal.redirectToHome(api, doc, ctx, config).asBackendCall
-                case ("get", "/") => OtoroshiApiPortal.serveHome(api, doc, ctx, config).asBackendCall
-                case ("get", "") => OtoroshiApiPortal.serveHome(api, doc, ctx, config).asBackendCall
-                case ("get", path) => OtoroshiApiPortal.serveResource(api, path, doc, ctx, config).asBackendCall
-                case _ => Results.NotFound("Resource not found").asBackendCall.vfuture
-              }
-            }
-          case _ => Results.NotFound("API doc not found").asBackendCall.vfuture
-        }
+            case Some(doc) if doc.enabled => OtoroshiApiPortal.route(Portal(api, doc, ctx, config)).asBackendCall
+            case _ => Results.NotFound("API doc not found").asBackendCall.vfuture
+          }
       }
     }
   }
 }
 
 object OtoroshiApiPortal {
-  def apikeysFromApiForUser(plan: ApiPlan, ctx: NgbBackendCallContext)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Seq[(ApiSubscription, ApiKey)]] = {
-    Source(env.proxyState.allApiSubscriptions().toList)
-      .filter(_.planRef == plan.id)
-      .filter(_.status == ApiSubscriptionEnabled)
-      .filter(_.subscriptionKind == ApiKind.Apikey)
-      .filter(c => ctx.user.map(_.email).contains(c.ownerRef))
-      .flatMapConcat(sub => if (sub.tokenRefs.isEmpty) Source.single((sub, "--")) else Source(sub.tokenRefs.filter(_.select("apikey").isDefined).map(r => (sub, r.select("apikey").asString)).toList))
-      .mapAsync(1) {
-        case (sub, tok) if tok == "--" && sub.tokenRefs.isEmpty => (sub, ApiKey(
-          clientId = IdGenerator.token(16),
-          clientSecret = "--",
-          clientName = sub.metadata.getOrElse("otoroshi-api-client-name", "--"),
-          description = sub.description,
-          authorizedEntities = Seq.empty,
-          enabled = false,
-          throttlingQuota = 100L,
-          dailyQuota = 100L,
-          monthlyQuota = 100L,
-          tags = Seq.empty,
-          metadata = Map(
-            "waiting-approval" -> "true",
-            "otoroshi-api-plan-ref" -> sub.metadata.getOrElse("otoroshi-api-plan-ref", "--"),
-          ),
-          location = sub.location,
-        ).some).vfuture
-        case (sub, token) =>
-          env.datastores.apiKeyDataStore.findById(token).map(key => (sub, key))
-      }
-      .flatMapConcat {
-        case (sub, opt) => Source(opt.map(key => (sub, key)).toList)
-      }
-      .runWith(Sink.seq)
+
+  import PortalPages.*
+
+  /** The security scheme the portal adds to the specifications: the API keys of the developers, as bearer tokens. */
+  val securityScheme = "otoroshi_apikey"
+
+  def route(portal: Portal)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
+    val method = portal.ctx.request.method.toLowerCase()
+    // (an id in a path, as asked: not in lower case)
+    def idIn(path: String): String = URLDecoder.decode(path.split("/").lift(3).getOrElse(""), StandardCharsets.UTF_8)
+    (method, portal.path) match {
+      case (_, "/api/_proxy")                                                    => serveProxy(portal)
+      case ("get", "/api/session")                                               => serveSession(portal)
+      case ("get", "/api/apikeys")                                               => signedIn(portal)(user => serveListApikeys(portal, user))
+      case ("post", "/api/apikeys")                                              => guarded(portal)(user => serveCreateApikey(portal, user))
+      case ("post", path) if path.startsWith("/api/apikeys/") && path.endsWith("/reveal") => guarded(portal)(user => serveRevealApikey(portal, user, idIn(portal.rawPath)))
+      case ("put", path) if path.startsWith("/api/apikeys/")                    => guarded(portal)(user => serveUpdateApikey(portal, user, idIn(portal.rawPath)))
+      case ("delete", path) if path.startsWith("/api/apikeys/")                 => guarded(portal)(user => serveDeleteApikey(portal, user, idIn(portal.rawPath)))
+      case ("get", "/api/plans")                                                 => servePlansJson(portal)
+      case ("get", "/api/documentation")                                         => serveDocumentationJson(portal)
+      case ("get", "/api/openapi")                                               => serveOpenApi(portal)
+      case ("get", path) if path.startsWith("/_portal/")                         => serveAsset(path.stripPrefix("/_portal/"))
+      case ("get", "/keys") if portal.keysEnabled                                => Results.Ok(keysPage(portal)).as("text/html").vfuture
+      case ("get", "/subscriptions" | "/subscriptions/apikeys")                  => Results.Redirect(s"${portal.prefix}/keys", 303).vfuture
+      case ("get", "/api-references")                                            => serveReferences(portal)
+      case ("get", path) if path.startsWith("/api-references/")                 => serveReference(portal, portal.rawPath.substring("/api-references".length))
+      case ("get", "/login")                                                     => redirectAfterLogin(portal)
+      case ("get", "/" | "")                                                     => serveHome(portal)
+      case ("get", _)                                                            => serveResource(portal)
+      case _                                                                     => Results.NotFound(Json.obj("error" -> "not found")).vfuture
+    }
   }
-  def handleRedirections(doc: ApiDocumentation, path: String)(f: => Future[Result])(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
-    (doc.redirections :+ ApiDocumentationRedirection(Json.obj("from" -> "/logout", "to" -> "/.well-known/otoroshi/logout"))).find(_.from == path) match {
-      case Some(redirection) => {
-        Results.Redirect(redirection.to, 303).vfuture
-      }
+
+  /* ---------- the pages ---------- */
+
+  def handleRedirections(portal: Portal)(f: => Future[Result])(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
+    (portal.doc.redirections :+ ApiDocumentationRedirection(Json.obj("from" -> "/logout", "to" -> "/.well-known/otoroshi/logout"))).find(_.from.toLowerCase == portal.path) match {
+      case Some(redirection) => Results.Redirect(redirection.to, 303).vfuture
       case None => f
     }
   }
-  def redirectToHome(api: Api, doc: ApiDocumentation, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
-    Results.Redirect(s"${config.prefix.getOrElse("")}/", 303).vfuture
+
+  // back where the developer signed in from (a path of this site only)
+  def redirectAfterLogin(portal: Portal)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
+    val to = portal.ctx.request.queryParam("redirect").filter(r => r.startsWith("/") && !r.startsWith("//") && !r.startsWith("/\\")).getOrElse(s"${portal.prefix}/")
+    Results.Redirect(to, 303).vfuture
   }
-  def serveHome(api: Api, doc: ApiDocumentation, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
-    handleRedirections(doc, "/") {
-      renderResource(doc.home, doc).map {
-        case (body, contentType) =>
-          Results.Ok(baseTemplate(s"${api.name} - Portal", config.prefix.getOrElse(""), api, doc, ctx)(body.utf8String)).as("text/html")
-      }
+
+  def serveAsset(name: String): Future[Result] = PortalAssets.files.get(name) match {
+    case Some((bytes, contentType)) => Results.Ok(bytes).as(contentType).withHeaders("Cache-Control" -> "public, max-age=86400").vfuture
+    case None => Results.NotFound("not found").vfuture
+  }
+
+  def serveHome(portal: Portal)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = handleRedirections(portal) {
+    val home = portal.doc.home
+    (if (hasContent(home)) loadPage(home, portal.doc).map(Some(_)) else None.vfuture).map { content =>
+      // (the title of the page is the one of the portal, said above it)
+      val markdown = content.flatMap(_.markdown).map(_.replaceFirst("^\\s*#\\s+[^\\n]*\\n+", ""))
+      Results.Ok(layout(portal, "home", None, homeBody(portal, content), markdown.map(m => Json.obj("markdown" -> m)).getOrElse(Json.obj()), markdown.isDefined)).as("text/html")
     }
   }
-  def serveResource(api: Api, path: String, doc: ApiDocumentation, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
-    handleRedirections(doc, path) {
-      val allResources = (doc.resources ++ Seq(doc.logo))
-      val foundNavTop = doc.navigation.find(_.path.contains(path))
-      allResources.find(_.path.contains(path)) match {
-        case None if foundNavTop.isDefined && foundNavTop.get.items.nonEmpty => {
-          val sidebar = foundNavTop.get
-          val head = sidebar.items.flatMap {
-            case link @ ApiDocumentationSidebarLink(_) => Seq(link)
-            case category @ ApiDocumentationSidebarCategory(_) => category.links
-          }.head
-          allResources.find(_.path.contains(head.link)) match {
-            case Some(resource) => {
-              renderResource(resource, doc).map {
-                case (body, contentType) =>
-                  val template = documentationPageTemplate(
-                    s"${api.name} - ${resource.title.getOrElse("Documentation")}",
-                    config.prefix.getOrElse(""),
-                    api,
-                    doc,
-                    sidebar,
-                    ctx
-                  )(body.utf8String)
-                  Results.Ok(template).as("text/html")
+
+  def serveResource(portal: Portal)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = handleRedirections(portal) {
+    val doc  = portal.doc
+    val path = portal.path
+    (doc.resources ++ Seq(doc.logo)).find(_.path.exists(_.toLowerCase == path)) match {
+      case None =>
+        // a section of the navigation: its first page
+        doc.navigation.find(_.path.exists(_.toLowerCase == path)).flatMap(nav => links(nav).headOption) match {
+          case Some(first) => Results.Redirect(portal.href(first.link), 303).vfuture
+          case None => Results.NotFound(notFoundPage(portal)).as("text/html").vfuture
+        }
+      case Some(resource) if resource.site_page && isReferenceTransform(resource) =>
+        Results.Ok(referencePage(portal, resource.path.head, resource.title.getOrElse("API reference"))).as("text/html").vfuture
+      case Some(resource) if resource.site_page => loadPage(resource, doc).map { content =>
+        val nav = doc.navigation.find(n => links(n).exists(_.link.toLowerCase == path)).orElse(doc.navigation.find(_.path.exists(p => path.startsWith(p.toLowerCase))))
+        val title = resource.title.orElse(nav.flatMap(n => links(n).find(_.link.toLowerCase == path).map(_.label)))
+        val data = content.markdown.map(m => Json.obj("markdown" -> m)).getOrElse(Json.obj())
+        val page = nav match {
+          case Some(n) => layout(portal, "guide", title, guideBody(portal, n, content, path), data, content.markdown.isDefined)
+          // (a page out of the navigation: on its own)
+          case None => layout(portal, "page", title, s"""<div class="container"><article class="prose" id="content">${content.html}</article></div>""", data, content.markdown.isDefined)
+        }
+        Results.Ok(page).as("text/html")
+      }
+      case Some(resource) => fetchResource(resource, doc).map { case (status, body) => Results.Status(status)(body).as(resource.contentType) }
+    }
+  }
+
+  def serveReferences(portal: Portal)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = portal.doc.references match {
+    case Seq() => Results.NotFound(notFoundPage(portal)).as("text/html").vfuture
+    case Seq(ref) => Results.Ok(referencePage(portal, ref.link, ref.title)).as("text/html").vfuture
+    case _ => Results.Ok(referencesPage(portal)).as("text/html").vfuture
+  }
+
+  def serveReference(portal: Portal, link: String)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
+    portal.doc.references.find(_.link.equalsIgnoreCase(link)) match {
+      case Some(ref) => Results.Ok(referencePage(portal, ref.link, ref.title)).as("text/html").vfuture
+      case None => Results.NotFound(notFoundPage(portal)).as("text/html").vfuture
+    }
+  }
+
+  /** A resource of the documentation, as it is (from its url, or its content), with the status of its source. */
+  def fetchResource(resource: ApiDocumentationResource, doc: ApiDocumentation)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[(Int, ByteString)] = {
+    resource.resolveUrl(doc) match {
+      case Some(url) => env.Ws.url(url)
+        .withFollowRedirects(resource.httpFollowRedirects)
+        .withHttpHeaders(resource.httpHeaders.toSeq*)
+        .withRequestTimeout(resource.httpTimeout)
+        .get()
+        .map(resp => (resp.status, resp.bodyAsBytes))
+        .recover { case e => (502, ByteString(e.getMessage)) }
+      case None => (200, resource.base64_content
+        .orElse(resource.json_content.map(_.stringify.byteString))
+        .orElse(resource.text_content.map(ByteString(_)))
+        .getOrElse(ByteString("no content"))).vfuture
+    }
+  }
+
+  def loadResource(resource: ApiDocumentationResource, doc: ApiDocumentation)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[ByteString] =
+    fetchResource(resource, doc).map(_._2)
+
+  /** A page of the documentation: what its source answered, or why it could not be read. */
+  def loadPage(resource: ApiDocumentationResource, doc: ApiDocumentation)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[PageContent] =
+    fetchResource(resource, doc).map {
+      case (status, body) if status < 400 => pageContent(resource, body)
+      case (status, _) => PageContent(s"""<p class="muted">This page could not be loaded: its source answered $status.</p>""", None)
+    }
+
+  /* ---------- the specifications ---------- */
+
+  // the specifications the reference shows: the references, and the resources rendered as one
+  def specLinks(portal: Portal): Seq[String] =
+    portal.doc.references.map(_.link) ++ portal.doc.resources.filter(isReferenceTransform).flatMap(_.path.headOption)
+
+  /** A specification of the portal, in json (written in json or yaml), and where it comes from. */
+  def loadSpec(portal: Portal, link: String)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Option[(JsObject, Option[String])]] = {
+    val doc = portal.doc
+    val loaded: Future[Option[(ByteString, Option[String])]] = doc.resources.find(_.path.exists(_.equalsIgnoreCase(link))) match {
+      case Some(resource) => loadResource(resource, doc).map(body => Some((body, resource.resolveUrl(doc))))
+      case None if link.startsWith("https://") || link.startsWith("http://") =>
+        env.Ws.url(link).withRequestTimeout(30.seconds).get().map(resp => Some((resp.bodyAsBytes, Some(link))))
+      case None => None.vfuture
+    }
+    loaded.map(_.flatMap { case (body, from) =>
+      val text = body.utf8String
+      Try(Json.parse(text)).toOption.orElse(Yaml.parse(text)).collect { case o: JsObject => (o, from) }
+    }).recover { case _ => None }
+  }
+
+  /**
+   * A specification as the reference shows it: the gateway of Otoroshi as its first server (the requests tried go
+   * through it, with the key of the developer), the keys of the developers as its security scheme, and its relative
+   * servers made absolute (the document is read from the portal, not from where it comes from).
+   */
+  def patchSpec(portal: Portal, spec: JsObject, from: Option[String]): JsObject = {
+    if (spec.select("openapi").asOpt[String].isEmpty) spec else {
+      val absolute = (url: String) => from.filter(_ => !url.matches("^[a-zA-Z][a-zA-Z0-9+.-]*://.*")).flatMap(base => Try(new URI(base).resolve(url).toString).toOption).getOrElse(url)
+      val servers = spec.select("servers").asOpt[Seq[JsObject]].getOrElse(Seq.empty).map { s =>
+        s.select("url").asOpt[String].map(url => s ++ Json.obj("url" -> absolute(url))).getOrElse(s)
+      }
+      val gateway = portal.gatewayUrl.filter(_ => portal.settings.gatewayServer).filterNot(gw => servers.exists(_.select("url").asOpt[String].contains(gw)))
+      val withServers = spec ++ Json.obj("servers" -> (gateway.map(gw => Json.obj("url" -> gw, "description" -> "Through the Otoroshi gateway")).toSeq ++ servers))
+      if (!portal.keysEnabled) withServers else {
+        val requirement = Json.obj(securityScheme -> Json.arr())
+        val components = withServers.select("components").asOpt[JsObject].getOrElse(Json.obj())
+        val schemes = components.select("securitySchemes").asOpt[JsObject].getOrElse(Json.obj())
+        val withScheme = (s: Seq[JsObject]) => if (s.exists(_.keys.contains(securityScheme))) s else requirement +: s
+        // the operations that ask for their own security: the key of the developer as one of their choices
+        val paths = withServers.select("paths").asOpt[JsObject].map { paths =>
+          JsObject(paths.value.map {
+            case (path, item: JsObject) => path -> JsObject(item.value.map {
+              case (method, op: JsObject) => op.select("security").asOpt[Seq[JsObject]] match {
+                case Some(security) if security.nonEmpty => method -> (op ++ Json.obj("security" -> withScheme(security)))
+                case _ => method -> op
               }
-            }
-            case None => {
-              Results.NotFound("Not found 1 !").vfuture
-            }
-          }
+              case other => other
+            })
+            case other => other
+          })
         }
-        case None => Results.NotFound("Not found 2 !").vfuture
-        case Some(resource) => renderResource(resource, doc).map {
-          case (body, contentType) =>
-            if (resource.site_page) {
-              val foundNavTop = doc.navigation.find(_.path.exists(str => path.startsWith(str)))
-              val template = documentationPageTemplate(
-                s"${api.name} - ${resource.title.getOrElse("Documentation")}",
-                config.prefix.getOrElse(""),
-                api,
-                doc,
-                foundNavTop.get,
-                ctx
-              )(body.utf8String)
-              Results.Ok(template).as("text/html")
-            } else {
-              Results.Ok(body).as(contentType)
-            }
+        withServers ++ Json.obj(
+          "components" -> (components ++ Json.obj("securitySchemes" -> (schemes ++ Json.obj(securityScheme -> Json.obj(
+            "type" -> "http",
+            "scheme" -> "bearer",
+            "description" -> "Your API key, from **My keys** on this portal: `Authorization: Bearer <your key>`"
+          ))))),
+          "security" -> withScheme(withServers.select("security").asOpt[Seq[JsObject]].getOrElse(Seq.empty))
+        ) ++ paths.map(p => Json.obj("paths" -> p)).getOrElse(Json.obj())
+      }
+    }
+  }
+
+  def serveOpenApi(portal: Portal)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
+    portal.ctx.request.queryParam("link").filter(specLinks(portal).contains) match {
+      case None => Results.NotFound(Json.obj("error" -> "no such specification")).vfuture
+      case Some(link) => loadSpec(portal, link).map {
+        case None => Results.NotFound(Json.obj("error" -> "the specification could not be read"))
+        case Some((spec, from)) => Results.Ok(patchSpec(portal, spec, from)).withHeaders("Cache-Control" -> "no-store")
+      }
+    }
+  }
+
+  /* ---------- the requests of the reference ---------- */
+
+  private val allowedHostsCache = new TrieMap[String, (Long, Set[String])]()
+
+  private def hostOf(url: String): Option[String] =
+    Try(new URI(url)).toOption.filter(u => u.getScheme == "http" || u.getScheme == "https").flatMap(u => Option(u.getHost)).map(_.toLowerCase)
+
+  /** Where the requests tried from the reference may go: the gateway of the API, the servers of its specifications. */
+  def allowedHosts(portal: Portal)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Set[String]] = {
+    val key = s"${portal.api.id}:${portal.gatewayUrl.getOrElse("")}"
+    allowedHostsCache.get(key) match {
+      case Some((at, hosts)) if at > System.currentTimeMillis() - 60000L => hosts.vfuture
+      case _ =>
+        Future.sequence(specLinks(portal).map(link => loadSpec(portal, link))).map { specs =>
+          val fromSpecs = specs.flatten.flatMap { case (spec, from) =>
+            val patched = patchSpec(portal, spec, from)
+            patched.select("servers").asOpt[Seq[JsObject]].getOrElse(Seq.empty).flatMap(_.select("url").asOpt[String]).flatMap(hostOf) ++
+              spec.select("host").asOpt[String].map(_.split(":").head.toLowerCase)
+          }
+          val hosts = (portal.gatewayUrl.flatMap(hostOf).toSeq ++ fromSpecs).toSet
+          allowedHostsCache.put(key, (System.currentTimeMillis(), hosts))
+          hosts
+        }
+    }
+  }
+
+  // what the browser adds on its own (the cookies of the portal first), never sent to the API
+  private val droppedRequestHeaders = Set(
+    "host", "cookie", "connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "trailers",
+    "transfer-encoding", "upgrade", "content-length", "accept-encoding", "origin", "referer", "forwarded", "x-forwarded-for",
+    "x-forwarded-host", "x-forwarded-proto", "x-forwarded-port", "x-real-ip", "x-scalar-cookie", "x-otoroshi-api-portal",
+    "remote-address", "timeout-access", "raw-request-uri", "tls-session-info", "otoroshi-state", "otoroshi-claim",
+    "otoroshi-request-id", "otoroshi-proxied-host", "otoroshi-request-timestamp"
+  )
+  // what would apply to the portal itself
+  private val droppedResponseHeaders = Set(
+    "content-type", "content-length", "content-encoding", "transfer-encoding", "connection", "keep-alive", "set-cookie",
+    "strict-transport-security", "alt-svc"
+  )
+
+  /**
+   * The requests tried from the reference (Scalar, `proxyUrl`): sent from the portal, so the browser asks no CORS, to the
+   * hosts of the API only, without the cookies of the portal (`X-Scalar-Cookie` is the one the developer set).
+   */
+  def serveProxy(portal: Portal)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
+    val ctx = portal.ctx
+    ctx.request.queryParam("scalar_url").flatMap(url => hostOf(url).map(host => (url, host))) match {
+      case None => Results.BadRequest(Json.obj("error" -> "the address of the request is missing or not http(s)")).vfuture
+      case Some((url, host)) => allowedHosts(portal).flatMap { hosts =>
+        if (!hosts.contains(host)) {
+          Results.Forbidden(Json.obj("error" -> s"the portal sends requests to the hosts of the API only, not to $host")).vfuture
+        } else {
+          val headers = ctx.rawRequest.headers.headers.filterNot { case (name, _) =>
+            val lower = name.toLowerCase
+            droppedRequestHeaders.contains(lower) || lower.startsWith("sec-")
+          } ++ ctx.rawRequest.headers.get("X-Scalar-Cookie").map(c => "Cookie" -> c).toSeq :+ ("Accept-Encoding" -> "identity")
+          ctx.request.body.runFold(ByteString.empty)(_ ++ _).flatMap { body =>
+            env.Ws.url(url)
+              .withFollowRedirects(false)
+              .withRequestTimeout(30.seconds)
+              .withMethod(ctx.request.method.toUpperCase())
+              .withHttpHeaders(headers*)
+              .applyOnIf(body.nonEmpty)(_.withBody(body))
+              .execute()
+              .map { resp =>
+                val respHeaders = resp.headers.toSeq.flatMap { case (name, values) => values.map(v => (name, v)) }.filterNot { case (name, _) => droppedResponseHeaders.contains(name.toLowerCase) }
+                val bytes = resp.bodyAsBytes
+                val entity = if (bytes.isEmpty) HttpEntity.NoEntity else HttpEntity.Strict(bytes, resp.header("Content-Type").orElse(Some("application/octet-stream")))
+                Results.Status(resp.status).sendEntity(entity).withHeaders(respHeaders*)
+              }
+              .recover { case e => Results.BadGateway(Json.obj("error" -> s"the request could not be sent: ${e.getMessage}")) }
+          }
         }
       }
     }
   }
-  def serveApiDoc(api: Api, doc: ApiDocumentation, specPath: Option[String], ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
-    if (doc.references.nonEmpty && doc.references.size > 1) {
-      val sidebar = ApiDocumentationSidebar(Json.obj(
-        "items" -> JsArray(
-          doc.references.map { r =>
-            Json.obj(
-              "label" -> r.title.json,
-              "link" -> s"${config.prefix.getOrElse("")}/api-references${r.link}",
-              "icon" -> r.icon.map(_.raw).getOrElse(Json.obj("css_icon_class" -> "bi bi-braces")).asValue
-            )
-          }
-        )
-      ))
-      specPath match {
-        case None => {
-          Results.Ok(documentationPageTemplate(s"${api.name} - API References", config.prefix.getOrElse(""), api, doc, sidebar, ctx)(
-            s"""<div class="space-y-6">
-               |  <section class="rounded-[28px] border border-slate-200/80 bg-gradient-to-br from-white to-stone-100 p-7 shadow-sm dark:border-white/10 dark:from-slate-900 dark:to-slate-900/70">
-               |    <span class="portal-eyebrow">Reference</span>
-               |    <h1 class="portal-page-title">API references</h1>
-               |    <p class="portal-page-subtitle">Pick a specification and explore operations, schemas and live examples.</p>
-               |  </section>
-               |  <div class="grid gap-4 md:grid-cols-2">
-               |    ${doc.references.map(r => s"""
-               |    |<a class="group rounded-[26px] border border-slate-200/80 bg-white/90 p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-lg dark:border-white/10 dark:bg-slate-900/80" href="${config.prefix.getOrElse("")}/api-references${r.link}">
-               |    |  <div class="flex items-start justify-between gap-4">
-               |    |    <div class="space-y-3">
-               |    |      <div class="inline-flex h-11 w-11 items-center justify-center rounded-2xl bg-sky-50 text-sky-700 dark:bg-sky-500/10 dark:text-sky-300">${renderResourceAsIcon(r.icon, doc)}</div>
-               |    |      <div>
-               |    |        <h2 class="text-xl font-semibold tracking-tight text-slate-950 dark:text-white">${r.title}</h2>
-               |    |        <p class="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">${r.description.getOrElse("Open the specification and inspect endpoints, examples and response shapes.")}</p>
-               |    |      </div>
-               |    |    </div>
-               |    |    <span class="inline-flex items-center gap-2 rounded-full bg-stone-100 px-3 py-1 text-sm font-medium text-slate-600 transition group-hover:bg-slate-950 group-hover:text-white dark:bg-white/10 dark:text-slate-300 dark:group-hover:bg-white dark:group-hover:text-slate-950">Open <i class="bi bi-arrow-right"></i></span>
-               |    |  </div>
-               |    |</a>
-               |    |""".stripMargin).mkString("\n")}
-               |  </div>
-               |</div>""".stripMargin
-          )).as("text/html").vfuture
-        }
-        case Some(innerPath) => {
-          doc.references.find(_.link.contains(innerPath)) match {
-            case None => Results.NotFound("Not found inner !").vfuture
-            case Some(ref) => {
-              Results.Ok(documentationPageTemplate(s"${api.name} - API Reference", config.prefix.getOrElse(""), api, doc, sidebar, ctx, noInnerPadding = true)(
-                s"""<div class="space-y-6 p-6 sm:p-8">
-                   |  <section class="rounded-[28px] border border-slate-200/80 bg-gradient-to-br from-white to-stone-100 p-7 shadow-sm dark:border-white/10 dark:from-slate-900 dark:to-slate-900/70">
-                   |    <span class="portal-eyebrow">Reference</span>
-                   |    <h1 class="portal-page-title">${ref.title}</h1>
-                   |    <p class="portal-page-subtitle">Read operations, inspect examples and launch the built-in tester directly from the reference.</p>
-                   |  </section>
-                   |  <div class="portal-redoc-shell overflow-hidden rounded-[28px] border border-slate-200/80 bg-white shadow-sm dark:border-white/10 dark:bg-slate-950">
-                   |    <!--redoc
-                   |       spec-url="${config.prefix.getOrElse("")}${ref.link}"
-                   |       hideHostname="false"
-                   |       sanitize="true"
-                   |       showObjectSchemaExamples="true"></redoc-->
-                   |     <div id="scalar-doc"></div>
-                   |  </div>
-                   |  <script>
-                   |    var interval = null;
-                   |    Scalar.createApiReference('#scalar-doc', {
-                   |      // The URL of the OpenAPI/Swagger document
-                   |      url: '${config.prefix.getOrElse("")}${ref.link}',
-                   |      hideDarkModeToggle: true,
-                   |      forceDarkModeState: localStorage.getItem('portal-theme-mode') === 'dark' ? 'dark' :  (localStorage.getItem('portal-theme-mode') === 'system' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : 'light'),
-                   |      // Avoid CORS issues
-                   |      //proxyUrl: 'https://proxy.scalar.com',
-                   |    })
-                   |    interval = setInterval(function() {
-                   |      var menu = document.querySelector('redoc .menu-content');
-                   |      if (menu) {
-                   |        [].slice.call(document.querySelectorAll('.sc-iGgWBj.sc-gsFSXq.lbpUdJ.bOFhJE')).map(function(node) {
-                   |          if (node.querySelector('.portal-redoc-action')) { return; }
-                   |          var button = document.createElement('button');
-                   |          button.type = 'button';
-                   |          button.className = 'portal-redoc-action';
-                   |          button.innerHTML = '<span>Test Request</span>';
-                   |          button.addEventListener('click', function() {
-                   |            var verb = node.childNodes[1].childNodes[0].childNodes[0].getAttribute('type').toUpperCase();
-                   |            var url = node.childNodes[1].childNodes[1].childNodes[0].childNodes[1].childNodes[0].textContent;
-                   |            var body = null;
-                   |            var presetHeaders = { 'Accept': 'application/json' };
-                   |            if (node.childNodes.length === 4) {
-                   |              body = node.childNodes[2].querySelector('code').textContent;
-                   |              presetHeaders['Content-Type'] = 'application/json';
-                   |            }
-                   |            openApiTester({ method: verb, url: url, presetBody: body, presetHeaders: presetHeaders });
-                   |          });
-                   |          node.prepend(button);
-                   |        });
-                   |        clearInterval(interval);
-                   |      }
-                   |    }, 200);
-                   |  </script>
-                   |</div>""".stripMargin
-              )).as("text/html").vfuture
-            }
-          }
-        }
-      }
-    } else if (doc.references.nonEmpty) {
-      Results.Ok(baseTemplate(s"${api.name} - API Reference", config.prefix.getOrElse(""), api, doc, ctx)(
-        s"""<section class="pb-14 pt-8 lg:pt-10">
-           |  <div class="container-xxl space-y-6">
-           |    <section class="rounded-[28px] border border-slate-200/80 bg-gradient-to-br from-white to-stone-100 p-7 shadow-sm dark:border-white/10 dark:from-slate-900 dark:to-slate-900/70">
-           |      <span class="portal-eyebrow">Reference</span>
-           |      <h1 class="portal-page-title">${doc.references.head.title}</h1>
-           |      <p class="portal-page-subtitle">Inspect request shapes, read examples and launch the tester from any operation.</p>
-           |    </section>
-           |    <div class="portal-redoc-shell overflow-hidden rounded-[28px] border border-slate-200/80 bg-white shadow-sm dark:border-white/10 dark:bg-slate-950">
-           |      <!--redoc
-           |         spec-url="${config.prefix.getOrElse("")}${doc.references.headOption.map(_.link).getOrElse("/openapi.json")}"
-           |         hideHostname="false"
-           |         showObjectSchemaExamples="true"
-           |      ></redoc-->
-           |      <div id="scalar-doc"></div>
-           |      <script>
-           |      Scalar.createApiReference('#scalar-doc', {
-           |        // The URL of the OpenAPI/Swagger document
-           |        url: '${config.prefix.getOrElse("")}${doc.references.headOption.map(_.link).getOrElse("/openapi.json")}',
-           |        hideDarkModeToggle: true,
-           |        forceDarkModeState: localStorage.getItem('portal-theme-mode') === 'dark' ? 'dark' :  (localStorage.getItem('portal-theme-mode') === 'system' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : 'light'),
-           |        // Avoid CORS issues
-           |        //proxyUrl: 'https://proxy.scalar.com',
-           |      })
-           |        var interval = null;
-           |        interval = setInterval(function() {
-           |          var menu = document.querySelector('redoc .menu-content');
-           |          if (menu) {
-           |            [].slice.call(document.querySelectorAll('.sc-iGgWBj.sc-gsFSXq.lbpUdJ.bOFhJE')).map(function(node) {
-           |              if (node.querySelector('.portal-redoc-action')) { return; }
-           |              var button = document.createElement('button');
-           |              button.type = 'button';
-           |              button.className = 'portal-redoc-action';
-           |              button.innerHTML = '<span>Test Request</span>';
-           |              button.addEventListener('click', function() {
-           |                var verb = node.childNodes[1].childNodes[0].childNodes[0].getAttribute('type').toUpperCase();
-           |                var url = node.childNodes[1].childNodes[1].childNodes[0].childNodes[1].childNodes[0].textContent;
-           |                var body = null;
-           |                var presetHeaders = { 'Accept': 'application/json' };
-           |                if (node.childNodes.length === 4) {
-           |                  body = node.childNodes[2].querySelector('code').textContent;
-           |                  presetHeaders['Content-Type'] = 'application/json';
-           |                }
-           |                openApiTester({ method: verb, url: url, presetBody: body, presetHeaders: presetHeaders });
-           |              });
-           |              node.prepend(button);
-           |            });
-           |            clearInterval(interval);
-           |          }
-           |        }, 200);
-           |      </script>
-           |    </div>
-           |  </div>
-           |</section>""".stripMargin
-      )).as("text/html").vfuture
-    } else {
-      Results.NotFound("Not found !").vfuture
-    }
+
+  /* ---------- the json of the portal ---------- */
+
+  def servePlansJson(portal: Portal)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
+    Results.Ok(JsArray(portal.plans.map(planJson))).vfuture
   }
-  def serverJs(api: Api, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
-    Results.Ok(
-      s"""
-         |(() => {
-         |  const root = document.documentElement;
-         |  const body = document.body;
-         |  const prefix = body.dataset.portalPrefix || '';
-         |  let lastMode = localStorage.getItem('portal-theme-mode');
-         |
-         |  const byId = (id) => document.getElementById(id);
-         |  const prefixPath = (path) => prefix + path;
-         |  const pretty = (value) => {
-         |    try { return JSON.stringify(value, null, 2); } catch (e) { return String(value); }
-         |  };
-         |  const tryParseJSON = (str) => {
-         |    if (!str || !str.trim()) return null;
-         |    try { return JSON.parse(str); } catch (e) { throw new Error('Invalid JSON'); }
-         |  };
-         |  const copyToClipboard = async (text) => {
-         |    try {
-         |      if (navigator.clipboard && navigator.clipboard.writeText) {
-         |        await navigator.clipboard.writeText(text);
-         |        return true;
-         |      }
-         |      const area = document.createElement('textarea');
-         |      area.value = text;
-         |      document.body.appendChild(area);
-         |      area.select();
-         |      document.execCommand('copy');
-         |      document.body.removeChild(area);
-         |      return true;
-         |    } catch (e) {
-         |      return false;
-         |    }
-         |  };
-         |
-         |  const themeMedia = window.matchMedia('(prefers-color-scheme: dark)');
-         |  const resolveTheme = (mode) => {
-         |    if (mode === 'system') {
-         |      return themeMedia.matches ? 'dark' : 'light';
-         |    }
-         |    return mode === 'dark' ? 'dark' : 'light';
-         |  };
-         |
-         |  const applyThemeMode = (mode) => {
-         |    const resolvedTheme = resolveTheme(mode);
-         |    root.classList.toggle('dark', resolvedTheme === 'dark');
-         |    const old = root.dataset.themeMode;
-         |    root.dataset.themeMode = mode;
-         |    localStorage.setItem('portal-theme-mode', mode);
-         |    const select = byId('themeSelect');
-         |    if (select) {
-         |      select.value = mode;
-         |    }
-         |    if (lastMode !== mode) {
-         |      lastMode = mode;
-         |      window.location.reload();
-         |    }
-         |  };
-         |
-         |  const openModal = (id) => {
-         |    const modal = byId(id);
-         |    if (!modal) return;
-         |    modal.classList.remove('hidden');
-         |    modal.classList.add('flex');
-         |    modal.setAttribute('aria-hidden', 'false');
-         |    body.classList.add('overflow-hidden');
-         |    const autofocus = modal.querySelector('[data-autofocus], input, textarea, select, button');
-         |    if (autofocus) autofocus.focus();
-         |  };
-         |
-         |  const closeModal = (id) => {
-         |    const modal = byId(id);
-         |    if (!modal) return;
-         |    modal.classList.add('hidden');
-         |    modal.classList.remove('flex');
-         |    modal.setAttribute('aria-hidden', 'true');
-         |    if (!document.querySelector('.portal-modal.flex')) {
-         |      body.classList.remove('overflow-hidden');
-         |    }
-         |  };
-         |
-         |  window.portalOpenModal = openModal;
-         |  window.portalCloseModal = closeModal;
-         |
-         |  document.addEventListener('click', async (event) => {
-         |    const toggle = event.target.closest('[data-portal-toggle]');
-         |    if (toggle) {
-         |      const target = byId(toggle.getAttribute('data-portal-toggle'));
-         |      if (target) {
-         |        target.classList.toggle('hidden');
-         |      }
-         |      return;
-         |    }
-         |
-         |    const openTrigger = event.target.closest('[data-modal-open]');
-         |    if (openTrigger) {
-         |      openModal(openTrigger.getAttribute('data-modal-open'));
-         |      return;
-         |    }
-         |
-         |    const closeTrigger = event.target.closest('[data-modal-close]');
-         |    if (closeTrigger) {
-         |      closeModal(closeTrigger.getAttribute('data-modal-close'));
-         |      return;
-         |    }
-         |
-         |    const backdrop = event.target.classList.contains('portal-modal') ? event.target : null;
-         |    if (backdrop) {
-         |      closeModal(backdrop.id);
-         |      return;
-         |    }
-         |
-         |    const copyBearer = event.target.closest('.apikey-bearer-copy');
-         |    if (copyBearer) {
-         |      await copyToClipboard(copyBearer.getAttribute('data-bearer') || '');
-         |      return;
-         |    }
-         |
-         |    const editApikey = event.target.closest('.apikey-edit');
-         |    if (editApikey && window.openApiKeyEditor) {
-         |      window.openApiKeyEditor({
-         |        mode: 'update',
-         |        apikey: {
-         |          client_id: editApikey.getAttribute('data-client-id'),
-         |          name: editApikey.getAttribute('data-name'),
-         |          description: editApikey.getAttribute('data-description'),
-         |          bearer: editApikey.getAttribute('data-bearer'),
-         |          enabled: editApikey.getAttribute('data-enabled') === 'true',
-         |          plan: editApikey.getAttribute('data-plan')
-         |        }
-         |      });
-         |      return;
-         |    }
-         |
-         |    const createApikey = event.target.closest('.apikey-create');
-         |    if (createApikey && window.openApiKeyEditor) {
-         |      window.openApiKeyEditor({ mode: 'create' });
-         |      return;
-         |    }
-         |
-         |    const deleteApikey = event.target.closest('.apikey-delete');
-         |    if (deleteApikey) {
-         |      const clientId = deleteApikey.getAttribute('data-client-id');
-         |      const ok = window.confirm('Are you sure you want to delete this API key?');
-         |      if (!ok) return;
-         |      await fetch(prefixPath('/api/apikeys/' + encodeURIComponent(clientId)), {
-         |        method: 'DELETE',
-         |        credentials: 'include'
-         |      });
-         |      window.location.reload();
-         |    }
-         |  });
-         |
-         |  document.addEventListener('keydown', (event) => {
-         |    if (event.key === 'Escape') {
-         |      const opened = document.querySelector('.portal-modal.flex');
-         |      if (opened) closeModal(opened.id);
-         |    }
-         |  });
-         |
-         |  const themeSelect = byId('themeSelect');
-         |  if (themeSelect) {
-         |    themeSelect.addEventListener('change', (event) => {
-         |      applyThemeMode(event.target.value || 'system');
-         |    });
-         |  }
-         |
-         |  themeMedia.addEventListener('change', () => {
-         |    if ((root.dataset.themeMode || 'system') === 'system') {
-         |      applyThemeMode('system');
-         |    }
-         |  });
-         |
-         |  const setupApiKeyEditor = () => {
-         |    const modalEl = byId('apiKeyEditorModal');
-         |    if (!modalEl) return;
-         |
-         |    const titleEl = byId('apiKeyEditorTitle');
-         |    const modeBadge = byId('apiKeyEditorModeBadge');
-         |    const msgEl = byId('apiKeyEditorMsg');
-         |    const nameEl = byId('apiKeyEditorName');
-         |    const descEl = byId('apiKeyEditorDesc');
-         |    const enabledEl = byId('apiKeyEditorEnabled');
-         |    const planRow = byId('apiKeyEditorPlanRow');
-         |    const planDisplay = byId('apiKeyEditorPlanDisplay');
-         |    const planInput = byId('apiKeyEditorDisplay');
-         |    const planSel = byId('apiKeyEditorPlan');
-         |    const planHelp = byId('apiKeyEditorPlanHelp');
-         |    const planHelp2 = byId('apiKeyEditorPlanHelp2');
-         |    const cidRow = byId('apiKeyEditorClientIdRow');
-         |    const cidEl = byId('apiKeyEditorClientId');
-         |    const bearerRow = byId('apiKeyEditorBearerRow');
-         |    const bearerEl = byId('apiKeyEditorBearer');
-         |    const btnShow = byId('apiKeyEditorToggleBearer');
-         |    const btnCopy = byId('apiKeyEditorCopyBearer');
-         |    const btnSave = byId('apiKeyEditorSubmitBtn');
-         |
-         |    const setBusy = (busy) => {
-         |      [nameEl, descEl, enabledEl, planSel, btnShow, btnCopy, btnSave].forEach((el) => {
-         |        if (el) el.disabled = !!busy;
-         |      });
-         |    };
-         |
-         |    const showMsg = (text, kind) => {
-         |      msgEl.textContent = text || '';
-         |      msgEl.className = 'portal-feedback ' + (
-         |        kind === 'success' ? 'portal-feedback-success' :
-         |        kind === 'warning' ? 'portal-feedback-warning' :
-         |        kind === 'danger' ? 'portal-feedback-danger' :
-         |        'portal-feedback-muted'
-         |      );
-         |    };
-         |
-         |    const resetMsg = () => showMsg('', '');
-         |
-         |    const loadPlans = async () => {
-         |      const mode = modeBadge.textContent || 'create';
-         |      planSel.innerHTML = '<option value="">Choose a plan</option>';
-         |      planHelp.textContent = '';
-         |      try {
-         |        const res = await fetch(prefixPath('/api/plans'), { method: 'GET', credentials: 'include' });
-         |        if (!res.ok) throw new Error('Unable to load plans');
-         |        const plans = await res.json();
-         |        if (!Array.isArray(plans)) return;
-         |        if (mode === 'create') {
-         |          plans.forEach((plan) => {
-         |            const opt = document.createElement('option');
-         |            opt.value = plan.id;
-         |            opt.textContent = plan.name || plan.id;
-         |            opt.dataset.description = plan.description || '';
-         |            planSel.appendChild(opt);
-         |          });
-         |          planSel.onchange = () => {
-         |            const option = planSel.options[planSel.selectedIndex];
-         |            planHelp.textContent = option && option.dataset ? option.dataset.description || '' : '';
-         |          };
-         |        } else {
-         |          const plan = plans.find((item) => item.id === planInput.value);
-         |          if (plan) {
-         |            planInput.value = plan.name || plan.id;
-         |            planHelp2.textContent = plan.description || '';
-         |          }
-         |        }
-         |      } catch (e) {
-         |        showMsg('Unable to load plans', 'warning');
-         |      }
-         |    };
-         |
-         |    btnShow.addEventListener('click', () => {
-         |      bearerEl.type = bearerEl.type === 'password' ? 'text' : 'password';
-         |    });
-         |
-         |    btnCopy.addEventListener('click', async () => {
-         |      const ok = await copyToClipboard(bearerEl.value || '');
-         |      showMsg(ok ? 'Bearer copied' : 'Copy failed', ok ? 'success' : 'danger');
-         |      setTimeout(resetMsg, 1800);
-         |    });
-         |
-         |    btnSave.addEventListener('click', async () => {
-         |      resetMsg();
-         |      const mode = modeBadge.textContent || 'create';
-         |      setBusy(true);
-         |      try {
-         |        if (mode === 'create') {
-         |          const payload = {
-         |            name: nameEl.value.trim(),
-         |            description: descEl.value.trim(),
-         |            enabled: !!enabledEl.checked,
-         |            plan: planSel.value
-         |          };
-         |          const res = await fetch(prefixPath('/api/apikeys'), {
-         |            method: 'POST',
-         |            headers: { 'content-type': 'application/json' },
-         |            body: JSON.stringify(payload),
-         |            credentials: 'include'
-         |          });
-         |          if (!res.ok) throw new Error('Create failed');
-         |          showMsg('API key created', 'success');
-         |          setTimeout(() => {
-         |            closeModal('apiKeyEditorModal');
-         |            window.location.reload();
-         |          }, 600);
-         |        } else {
-         |          const clientId = cidEl.value;
-         |          const payload = {
-         |            name: nameEl.value.trim(),
-         |            description: descEl.value.trim(),
-         |            enabled: !!enabledEl.checked
-         |          };
-         |          const res = await fetch(prefixPath('/api/apikeys/' + encodeURIComponent(clientId)), {
-         |            method: 'PUT',
-         |            headers: { 'content-type': 'application/json' },
-         |            body: JSON.stringify(payload),
-         |            credentials: 'include'
-         |          });
-         |          if (!res.ok) throw new Error('Update failed');
-         |          showMsg('API key updated', 'success');
-         |          setTimeout(() => {
-         |            closeModal('apiKeyEditorModal');
-         |            window.location.reload();
-         |          }, 600);
-         |        }
-         |      } catch (e) {
-         |        showMsg(e.message || 'Unexpected error', 'danger');
-         |      } finally {
-         |        setBusy(false);
-         |      }
-         |    });
-         |
-         |    window.openApiKeyEditor = async ({ mode = 'create', apikey = null } = {}) => {
-         |      resetMsg();
-         |      nameEl.value = '';
-         |      descEl.value = '';
-         |      enabledEl.checked = true;
-         |      planSel.value = '';
-         |      planInput.value = '';
-         |      planHelp.textContent = '';
-         |      planHelp2.textContent = '';
-         |
-         |      if (mode === 'update') {
-         |        titleEl.textContent = 'Update API key';
-         |        modeBadge.textContent = 'update';
-         |        modeBadge.hidden = false;
-         |        cidRow.hidden = false;
-         |        bearerRow.hidden = false;
-         |        planRow.hidden = true;
-         |        planDisplay.hidden = false;
-         |        const key = apikey || {};
-         |        cidEl.value = key.client_id || '';
-         |        nameEl.value = key.name || '';
-         |        descEl.value = key.description || '';
-         |        enabledEl.checked = !!key.enabled;
-         |        planInput.value = key.plan || '';
-         |        bearerEl.value = key.bearer || '';
-         |        bearerEl.type = 'password';
-         |      } else {
-         |        titleEl.textContent = 'Create API key';
-         |        modeBadge.textContent = 'create';
-         |        modeBadge.hidden = true;
-         |        cidRow.hidden = true;
-         |        bearerRow.hidden = true;
-         |        planRow.hidden = false;
-         |        planDisplay.hidden = true;
-         |      }
-         |
-         |      await loadPlans();
-         |      openModal('apiKeyEditorModal');
-         |    };
-         |  };
-         |
-         |  const setupApiTester = () => {
-         |    const modalEl = byId('apiTesterModal');
-         |    if (!modalEl) return;
-         |
-         |    const methodBadge = byId('apiTesterMethod');
-         |    const urlInput = byId('apiTesterUrl');
-         |    const secretWarn = byId('apiTesterSecretWarn');
-         |    const apiKeySelect = byId('apiTesterApiKeySelect');
-         |    const headersArea = byId('apiTesterHeaders');
-         |    const bodyArea = byId('apiTesterBody');
-         |    const statusEl = byId('apiTesterStatus');
-         |    const durationEl = byId('apiTesterDuration');
-         |    const responseHeadersEl = byId('apiTesterRespHeaders');
-         |    const responseBodyEl = byId('apiTesterRespBody');
-         |    const errorEl = byId('apiTesterError');
-         |    const btnSend = byId('apiTesterSendBtn');
-         |    const btnResetHeaders = byId('apiTesterResetHeaders');
-         |    const btnClearResponse = byId('apiTesterClearResponse');
-         |    const defaultHeaders = { accept: 'application/json' };
-         |
-         |    const updateSecretBanner = () => {
-         |      const content = (headersArea.value || '') + ' ' + (bodyArea.value || '');
-         |      const danger = /authorization|secret|token|apikey|api[-_ ]key/i.test(content);
-         |      secretWarn.classList.toggle('hidden', !danger);
-         |    };
-         |
-         |    const loadApiKeys = async () => {
-         |      apiKeySelect.innerHTML = '<option value="">No API key</option>';
-         |      try {
-         |        const res = await fetch(prefixPath('/api/apikeys'), { method: 'GET', credentials: 'include' });
-         |        if (!res.ok) return;
-         |        const keys = await res.json();
-         |        if (!Array.isArray(keys)) return;
-         |        keys.forEach((key, index) => {
-         |          const option = document.createElement('option');
-         |          option.value = String(index);
-         |          option.textContent = (key.name || 'API key') + ' (' + (key.client_id || '-') + ')';
-         |          option.dataset.bearer = key.bearer || '';
-         |          apiKeySelect.appendChild(option);
-         |        });
-         |      } catch (e) {
-         |        console.warn('Unable to load API keys', e);
-         |      }
-         |    };
-         |
-         |    apiKeySelect.addEventListener('change', () => {
-         |      const option = apiKeySelect.options[apiKeySelect.selectedIndex];
-         |      const bearer = option && option.dataset ? option.dataset.bearer || '' : '';
-         |      let headers = defaultHeaders;
-         |      try {
-         |        headers = tryParseJSON(headersArea.value) || { ...defaultHeaders };
-         |      } catch (e) {
-         |        headers = { ...defaultHeaders };
-         |      }
-         |      if (bearer) headers.authorization = 'Bearer ' + bearer;
-         |      headersArea.value = pretty(headers);
-         |      updateSecretBanner();
-         |    });
-         |
-         |    headersArea.addEventListener('input', updateSecretBanner);
-         |    bodyArea.addEventListener('input', updateSecretBanner);
-         |
-         |    btnResetHeaders.addEventListener('click', () => {
-         |      headersArea.value = pretty(defaultHeaders);
-         |      updateSecretBanner();
-         |    });
-         |
-         |    btnClearResponse.addEventListener('click', () => {
-         |      statusEl.textContent = '-';
-         |      durationEl.textContent = '-';
-         |      responseHeadersEl.textContent = '';
-         |      responseBodyEl.textContent = '';
-         |      errorEl.textContent = '';
-         |    });
-         |
-         |    btnSend.addEventListener('click', async () => {
-         |      errorEl.textContent = '';
-         |      statusEl.textContent = '...';
-         |      durationEl.textContent = '...';
-         |      responseHeadersEl.textContent = '';
-         |      responseBodyEl.textContent = '';
-         |
-         |      let headers;
-         |      let requestBody;
-         |      try {
-         |        headers = tryParseJSON(headersArea.value) || {};
-         |      } catch (e) {
-         |        errorEl.textContent = 'Invalid headers JSON';
-         |        return;
-         |      }
-         |      try {
-         |        requestBody = tryParseJSON(bodyArea.value);
-         |      } catch (e) {
-         |        errorEl.textContent = 'Invalid body JSON';
-         |        return;
-         |      }
-         |
-         |      const started = performance.now();
-         |      try {
-         |        const res = await fetch(prefixPath('/api/_test'), {
-         |          method: 'POST',
-         |          credentials: 'include',
-         |          headers: { 'content-type': 'application/json' },
-         |          body: JSON.stringify({
-         |            method: methodBadge.textContent,
-         |            url: urlInput.value,
-         |            headers: headers,
-         |            body_json: requestBody
-         |          })
-         |        });
-         |        const payload = await res.json();
-         |        durationEl.textContent = Math.round(performance.now() - started) + ' ms';
-         |        statusEl.textContent = String(payload.status || '-') + ' ' + String(payload.statusText || '');
-         |        responseHeadersEl.textContent = pretty(payload.headers || {});
-         |        const responseHeaders = payload.headers || {};
-         |        const contentType = responseHeaders['content-type'] || responseHeaders['Content-Type'] || '';
-         |        if (contentType.indexOf('json') > -1) {
-         |          try {
-         |            responseBodyEl.textContent = pretty(JSON.parse(payload.body_str || '{}'));
-         |          } catch (e) {
-         |            responseBodyEl.textContent = payload.body_str || '';
-         |          }
-         |        } else {
-         |          responseBodyEl.textContent = payload.body_str || '';
-         |        }
-         |      } catch (e) {
-         |        durationEl.textContent = Math.round(performance.now() - started) + ' ms';
-         |        statusEl.textContent = '-';
-         |        errorEl.textContent = e.message || 'Request failed';
-         |      }
-         |    });
-         |
-         |    window.openApiTester = async ({ url, method = 'GET', presetHeaders = null, presetBody = null } = {}) => {
-         |      methodBadge.textContent = String(method || 'GET').toUpperCase();
-         |      urlInput.value = url || '';
-         |      headersArea.value = pretty(presetHeaders && typeof presetHeaders === 'object' ? presetHeaders : defaultHeaders);
-         |      if (typeof presetBody === 'string') {
-         |        bodyArea.value = presetBody;
-         |      } else if (presetBody) {
-         |        bodyArea.value = pretty(presetBody);
-         |      } else {
-         |        bodyArea.value = '';
-         |      }
-         |      statusEl.textContent = '-';
-         |      durationEl.textContent = '-';
-         |      responseHeadersEl.textContent = '';
-         |      responseBodyEl.textContent = '';
-         |      errorEl.textContent = '';
-         |      await loadApiKeys();
-         |      updateSecretBanner();
-         |      openModal('apiTesterModal');
-         |    };
-         |  };
-         |
-         |  const preferredThemeMode = localStorage.getItem('portal-theme-mode') || 'system';
-         |  applyThemeMode(preferredThemeMode);
-         |  setupApiKeyEditor();
-         |  setupApiTester();
-         |})();
-         |""".stripMargin
-    ).as("text/javascript").vfuture
-  }
-  def servePlansJson(api: Api, doc: ApiDocumentation, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
-    Results.Ok(JsArray(api.plans.map(_.raw))).vfuture
-  }
-  def serveDocumentationJson(api: Api, doc: ApiDocumentation, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
-    Results.Ok(doc.json.asObject - "source" ++ Json.obj(
+
+  def serveDocumentationJson(portal: Portal)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
+    val api = portal.api
+    val doc = portal.doc
+    // (never the headers the resources are fetched with: they may hold credentials)
+    val json = doc.json.asObject - "source" ++ Json.obj("resources" -> JsArray(doc.resources.map(_.raw - "http_headers")))
+    Results.Ok(json ++ Json.obj(
       "name" -> api.name,
       "description" -> api.description,
       "api_tags" -> api.tags,
@@ -970,1064 +457,209 @@ object OtoroshiApiPortal {
       "doc_metadata" -> doc.metadata,
     )).vfuture
   }
-  def serveApikeysPage(api: Api, doc: ApiDocumentation, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
-    val publishedPlans = api.plans.filter(c => c.status == ApiPlanStatus.Published)
-    Source(publishedPlans.toList).mapAsync(1) { plan =>
-      apikeysFromApiForUser(plan, ctx).map(_.map(t => (t._1, t._2, plan)))
-    }
-    .flatMapConcat(seq => Source(seq.toList))
-    .runWith(Sink.seq)
-    .flatMap { apikeys =>
-      val waitingCount = apikeys.count(_._2.metadata.get("waiting-approval").contains("true"))
-      val activeCount = apikeys.count(_._2.enabled)
-      val sidebar = ApiDocumentationSidebar(Json.obj(
-        "items" -> Json.arr(Json.obj(
-          "label" -> "My apikeys",
-          "link" -> s"${config.prefix.getOrElse("")}/subscriptions/apikeys",
-          "icon" -> Json.obj("css_icon_class" -> "bi bi-key")
-        ))
-      ))
-      Results.Ok(documentationPageTemplate(s"${api.name} - Subscriptions", config.prefix.getOrElse(""), api, doc, sidebar, ctx)(
-        s"""<div class="space-y-6">
-           |  <section class="flex flex-col gap-5 rounded-[28px] border border-slate-200/80 bg-gradient-to-br from-white to-stone-100 p-7 shadow-sm lg:flex-row lg:items-end lg:justify-between dark:border-white/10 dark:from-slate-900 dark:to-slate-900/70">
-           |    <div>
-           |      <span class="portal-eyebrow">Access</span>
-           |      <h1 class="portal-page-title">Subscriptions</h1>
-           |      <p class="portal-page-subtitle">Manage credentials, approval status and quick access tokens for this API.</p>
-           |    </div>
-           |    <div>
-           |      <button type="button" class="apikey-create inline-flex items-center gap-2 rounded-full bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:-translate-y-0.5 dark:bg-white dark:text-slate-950">
-           |        <i class="bi bi-plus-circle"></i>
-           |        <span>Create API key</span>
-           |      </button>
-           |    </div>
-           |  </section>
-           |
-           |  <section class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-           |    <article class="portal-shell-card p-5">
-           |      <span class="text-sm text-slate-500 dark:text-slate-400">Published plans</span>
-           |      <strong class="mt-3 block text-3xl font-semibold tracking-tight text-slate-950 dark:text-white">${publishedPlans.size}</strong>
-           |    </article>
-           |    <article class="portal-shell-card p-5">
-           |      <span class="text-sm text-slate-500 dark:text-slate-400">API keys</span>
-           |      <strong class="mt-3 block text-3xl font-semibold tracking-tight text-slate-950 dark:text-white">${apikeys.size}</strong>
-           |    </article>
-           |    <article class="portal-shell-card p-5">
-           |      <span class="text-sm text-slate-500 dark:text-slate-400">Active</span>
-           |      <strong class="mt-3 block text-3xl font-semibold tracking-tight text-slate-950 dark:text-white">${activeCount}</strong>
-           |    </article>
-           |    <article class="portal-shell-card p-5">
-           |      <span class="text-sm text-slate-500 dark:text-slate-400">Waiting approval</span>
-           |      <strong class="mt-3 block text-3xl font-semibold tracking-tight text-slate-950 dark:text-white">${waitingCount}</strong>
-           |    </article>
-           |  </section>
-           |
-           |  <section class="portal-surface">
-           |    <div class="mb-6">
-           |      <div>
-           |        <h2 class="text-xl font-semibold tracking-tight text-slate-950 dark:text-white">Your credentials</h2>
-           |        <p class="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">Use these keys in the API tester or in your own applications.</p>
-           |      </div>
-           |    </div>
-           |    <div class="overflow-auto">
-           |      <table class="min-w-full border-collapse text-left">
-           |        <thead>
-           |          <tr>
-           |            <th class="border-b border-slate-200 px-4 py-3 text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500 dark:border-white/10 dark:text-slate-400">#</th>
-           |            <th class="border-b border-slate-200 px-4 py-3 text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500 dark:border-white/10 dark:text-slate-400">Name</th>
-           |            <th class="border-b border-slate-200 px-4 py-3 text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500 dark:border-white/10 dark:text-slate-400">Plan</th>
-           |            <th class="border-b border-slate-200 px-4 py-3 text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500 dark:border-white/10 dark:text-slate-400">Enabled</th>
-           |            <th class="border-b border-slate-200 px-4 py-3 text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500 dark:border-white/10 dark:text-slate-400">Status</th>
-           |            <th class="border-b border-slate-200 px-4 py-3 text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500 dark:border-white/10 dark:text-slate-400">Actions</th>
-           |          </tr>
-           |        </thead>
-           |        <tbody>
-           |          ${apikeys.zipWithIndex.map { tuple =>
-                        val waiting = tuple._1._2.metadata.get("waiting-approval").contains("true")
-                        val statusPill =
-                          if (waiting) """<span class="portal-pill portal-pill-warning">waiting approval</span>"""
-                          else """<span class="portal-pill portal-pill-success">approved</span>"""
-                        val enabledPill =
-                          if (tuple._1._2.enabled) """<span class="portal-pill portal-pill-success">enabled</span>"""
-                          else """<span class="portal-pill portal-pill-muted">disabled</span>"""
-                        val copyAction =
-                          if (waiting) ""
-                          else s"""<button class="apikey-bearer-copy inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm transition hover:-translate-y-0.5 dark:border-white/10 dark:bg-slate-800 dark:text-slate-200" type="button" title="Copy bearer" data-bearer="${tuple._1._2.toBearer()}"><i class="bi bi-copy"></i><span>Copy</span></button>"""
-                        s"""<tr>
-                           |  <td class="border-b border-slate-200 px-4 py-4 text-sm text-slate-500 dark:border-white/10 dark:text-slate-400">${tuple._2 + 1}</td>
-                           |  <td class="border-b border-slate-200 px-4 py-4 dark:border-white/10">
-                           |    <div class="font-semibold text-slate-950 dark:text-white">${tuple._1._2.clientName}</div>
-                           |    <div class="mt-1 font-mono text-xs text-slate-500 dark:text-slate-400">${tuple._1._2.clientId}</div>
-                           |  </td>
-                           |  <td class="border-b border-slate-200 px-4 py-4 text-sm text-slate-700 dark:border-white/10 dark:text-slate-200">${tuple._1._3.name}</td>
-                           |  <td class="border-b border-slate-200 px-4 py-4 dark:border-white/10">${enabledPill}</td>
-                           |  <td class="border-b border-slate-200 px-4 py-4 dark:border-white/10">${statusPill}</td>
-                           |  <td class="border-b border-slate-200 px-4 py-4 dark:border-white/10">
-                           |    <div class="flex flex-wrap gap-2">
-                           |      <button class="apikey-edit inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm transition hover:-translate-y-0.5 dark:border-white/10 dark:bg-slate-800 dark:text-slate-200" type="button" title="Edit API key"
-                           |        data-client-id="${tuple._1._2.clientId}"
-                           |        data-name="${tuple._1._2.clientName}"
-                           |        data-description="${tuple._1._2.description}"
-                           |        data-bearer="${if (waiting) "--" else tuple._1._2.toBearer()}"
-                           |        data-enabled="${tuple._1._2.enabled}"
-                           |        data-plan="${tuple._1._3.id}"
-                           |        data-sub="${tuple._1._1.id}">
-                           |        <i class="bi bi-pencil-square"></i>
-                           |        <span>Edit</span>
-                           |      </button>
-                           |      ${copyAction}
-                           |      <button class="apikey-delete inline-flex items-center gap-2 rounded-full border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 shadow-sm transition hover:-translate-y-0.5 dark:border-rose-500/20 dark:bg-rose-500/10 dark:text-rose-300" type="button" title="Delete API key"
-                           |        data-client-id="${tuple._1._2.clientId}"
-                           |        data-sub="${tuple._1._1.id}"
-                           |        data-plan="${tuple._1._3.id}">
-                           |        <i class="bi bi-trash"></i>
-                           |        <span>Delete</span>
-                           |      </button>
-                           |    </div>
-                           |  </td>
-                           |</tr>""".stripMargin
-                      }.mkString("\n")}
-           |        </tbody>
-           |      </table>
-           |    </div>
-           |  </section>
-           |</div>
-           |""".stripMargin)).as("text/html").vfuture
+
+  def serveSession(portal: Portal)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
+    Results.Ok(Json.obj(
+      "user" -> portal.user.map(u => Json.obj("name" -> u.name, "email" -> u.email)),
+      "plans" -> JsArray(portal.keyPlans.map(planJson)),
+      "login_url" -> s"${portal.prefix}/login",
+      "logout_url" -> portal.logoutUrl,
+      "per_user" -> portal.settings.keysPerUser,
+    )).withHeaders("Cache-Control" -> "no-store").vfuture
+  }
+
+  /* ---------- the keys of the developers ---------- */
+
+  /** A key of a developer: their subscription to a plan, and the api key it gave (none while it waits an approval). */
+  case class UserKey(sub: ApiSubscription, key: Option[ApiKey], plan: ApiPlan) {
+    def waiting: Boolean = sub.status == ApiSubscriptionPending || key.isEmpty
+    def enabled: Boolean = !waiting && sub.status != ApiSubscriptionDisabled && key.exists(_.enabled)
+    def name: String = sub.metadata.get("otoroshi-api-client-name").orElse(key.map(_.clientName)).getOrElse(sub.name)
+    def json: JsObject = Json.obj(
+      "id" -> sub.id,
+      "sub" -> sub.id,
+      "client_id" -> key.map(_.clientId),
+      "name" -> name,
+      "description" -> (if (sub.description.nonEmpty) sub.description else key.map(_.description).getOrElse("")),
+      "enabled" -> enabled,
+      "plan" -> plan.id,
+      "plan_name" -> plan.name,
+      "status" -> (if (waiting) "waiting-approval" else "validated"),
+      "created_at" -> sub.dates.created_at.getMillis,
+    )
+  }
+
+  private def keyOf(sub: ApiSubscription)(using env: Env, ec: ExecutionContext): Future[Option[Option[ApiKey]]] = {
+    sub.tokenRefs.flatMap(_.select("apikey").asOpt[String]).headOption match {
+      case None => Some(None).vfuture
+      // (a key gone: the subscription with it)
+      case Some(id) => env.datastores.apiKeyDataStore.findById(id).map(_.map(Some(_)))
     }
   }
 
-  def serveAllApikeys(api: Api, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
-    Source(api.plans.filter(c => c.status == ApiPlanStatus.Published).toList).mapAsync(1) { plan =>
-      apikeysFromApiForUser(plan, ctx).map(_.map(t => (t._1, t._2, plan)))
+  def userKeys(portal: Portal, user: PrivateAppsUser)(using env: Env, ec: ExecutionContext): Future[Seq[UserKey]] = {
+    val plans = portal.api.plans.map(p => p.id -> p).toMap
+    val subs = env.proxyState.allApiSubscriptions().filter { s =>
+      s.apiRef == portal.api.id && s.ownerRef == user.email && s.subscriptionKind == ApiKind.Apikey && plans.contains(s.planRef)
     }
-    .flatMapConcat(s => Source(s.toList))
-    .runWith(Sink.seq)
-    .flatMap { apikeys =>
-      Results.Ok(JsArray(apikeys.map {
-        case (sub, key, plan) =>
-          key.metadata.get("waiting-approval") match {
-            case Some("true") => Json.obj(
-              "client_id" -> key.clientId,
-              "name" -> key.clientName,
-              "description" -> key.description,
-              "bearer" -> "--",
-              "enabled" -> false,
-              "sub" -> sub.id,
-              "plan" -> plan.id,
-              "status" -> "waiting-approval",
-            )
-            case _ => Json.obj(
-              "client_id" -> key.clientId,
-              "name" -> key.clientName,
-              "description" -> key.description,
-              "bearer" -> key.toBearer(),
-              "enabled" -> key.enabled,
-              "sub" -> sub.id,
-              "plan" -> plan.id,
-              "status" -> "validated",
-            )
-          }
-      })).as("application/json").vfuture
+    Future.sequence(subs.map(sub => keyOf(sub).map(_.map(key => UserKey(sub, key, plans(sub.planRef))))))
+      .map(_.flatten.sortBy(_.sub.dates.created_at.getMillis))
+  }
+
+  /** A key of the developer, by the id of its subscription (or the client id of its api key). */
+  def findUserKey(portal: Portal, user: PrivateAppsUser, id: String)(using env: Env, ec: ExecutionContext): Future[Option[UserKey]] = {
+    env.datastores.apiSubscriptionDataStore.findById(id).flatMap {
+      case Some(sub) => Some(sub).vfuture
+      case None => env.datastores.apiKeyDataStore.findById(id).flatMap {
+        case Some(key) => key.apiRef.map(_.subscription).orElse(key.metadata.get("otoroshi-api-sub-ref")) match {
+          case Some(subId) => env.datastores.apiSubscriptionDataStore.findById(subId)
+          case None => None.vfuture
+        }
+        case None => None.vfuture
+      }
+    }.flatMap {
+      case Some(sub) if sub.apiRef == portal.api.id && sub.ownerRef == user.email =>
+        portal.api.plans.find(_.id == sub.planRef) match {
+          case None => None.vfuture
+          case Some(plan) => keyOf(sub).map(_.map(key => UserKey(sub, key, plan)))
+        }
+      case _ => None.vfuture
     }
   }
-  def serveApiTester(api: Api, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
-    ctx.request.body.runFold(ByteString.empty)(_ ++ _).flatMap { body =>
-      val bodyJson = Json.parse(body.utf8String)
-      val method = bodyJson.select("method").asOptString.getOrElse("GET")
-      val url = bodyJson.select("url").asString
-      val headers = bodyJson.select("headers").asOpt[Map[String, String]].getOrElse(Map.empty)
-      val reqBody = bodyJson.select("body_json").asOpt[JsValue].filterNot(_ == JsNull)
-      env.Ws.url(url).withFollowRedirects(false).withRequestTimeout(30.seconds).withMethod(method.toUpperCase()).withHttpHeaders(headers.toSeq*).applyOnWithOpt(reqBody) {
-        case (req, body) => req.withBody(body)
-      }.execute().map { resp =>
-        Results.Ok(Json.obj(
-          "status" -> resp.status,
-          "statusText" -> resp.statusText,
-          "headers" -> resp.headers.view.mapValues(_.last).toMap,
-          "body_str" -> resp.body[String]
-        ))
+
+  private def jsonError(status: Results.Status, message: String): Future[Result] = status(Json.obj("error" -> message)).vfuture
+
+  private def signedIn(portal: Portal)(f: PrivateAppsUser => Future[Result]): Future[Result] = portal.user match {
+    case None => jsonError(Results.Unauthorized, "sign in first")
+    case Some(user) => f(user)
+  }
+
+  // the writes: from the pages of the portal only (a header a foreign form never sends)
+  private def guarded(portal: Portal)(f: PrivateAppsUser => Future[Result]): Future[Result] = {
+    if (!portal.ctx.rawRequest.headers.get("X-Otoroshi-Api-Portal").contains("1")) jsonError(Results.Forbidden, "the portal only")
+    else signedIn(portal)(f)
+  }
+
+  private def bodyOf(portal: Portal)(using mat: Materializer, ec: ExecutionContext): Future[JsValue] =
+    portal.ctx.request.body.runFold(ByteString.empty)(_ ++ _).map(b => Try(Json.parse(b.utf8String)).getOrElse(Json.obj()))
+
+  private def saveKey(key: ApiKey)(using env: Env, ec: ExecutionContext): Future[Boolean] = {
+    if (env.clusterConfig.mode.isWorker) {
+      ClusterAgent.clusterSaveApikey(env, key)(using ec, env.otoroshiMaterializer)
+    }
+    env.datastores.apiKeyDataStore.set(key)
+  }
+
+  def serveListApikeys(portal: Portal, user: PrivateAppsUser)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
+    userKeys(portal, user).map(keys => Results.Ok(JsArray(keys.map(_.json))).withHeaders("Cache-Control" -> "no-store"))
+  }
+
+  /**
+   * A new key: a subscription to the plan, its api key made by Otoroshi from the plan. A plan validated by hand: the
+   * subscription waits (pending), its key made disabled, enabled when the subscription is confirmed.
+   */
+  def serveCreateApikey(portal: Portal, user: PrivateAppsUser)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
+    val api = portal.api
+    bodyOf(portal).flatMap { body =>
+      val name = body.select("name").asOpt[String].map(_.trim.take(80)).filter(_.nonEmpty).getOrElse("My key")
+      val description = body.select("description").asOpt[String].map(_.trim.take(500)).getOrElse("")
+      val planId = body.select("plan").asOpt[String]
+      portal.keyPlans.find(p => planId.contains(p.id)) match {
+        case None => jsonError(Results.BadRequest, "no such plan on this portal")
+        case Some(plan) => userKeys(portal, user).flatMap { keys =>
+          if (portal.settings.keysPerUser.exists(keys.size >= _)) {
+            jsonError(Results.BadRequest, s"${portal.settings.keysPerUser.get} keys at most: revoke one to take another")
+          } else {
+            val now = DateTime.now()
+            val auto = plan.validation.isAuto
+            val sub = ApiSubscription(
+              location = api.location,
+              id = s"api-plan-subscription_${IdGenerator.uuid}",
+              name = name,
+              description = description,
+              status = if (auto) ApiSubscriptionEnabled else ApiSubscriptionDisabled,
+              dates = ApiSubscriptionDates(created_at = now, processed_at = now, started_at = now, paused_at = now, ending_at = now, closed_at = now),
+              ownerRef = user.email,
+              apiRef = api.id,
+              subscriptionKind = ApiKind.Apikey,
+              tokenRefs = Seq.empty,
+              planRef = plan.id,
+              tags = Seq.empty,
+              metadata = Map(
+                "created_by" -> "otoroshi-api-portal-plugin",
+                "otoroshi-api-client-name" -> name,
+              )
+            )
+            ApiSubscription.validate(api.id, sub, WriteAction.Create, isDraft = false).flatMap {
+              case Left(error) => jsonError(Results.BadRequest, error)
+              case Right(created) =>
+                val saved = created.copy(status = if (auto) ApiSubscriptionEnabled else ApiSubscriptionPending)
+                env.datastores.apiSubscriptionDataStore.set(saved).flatMap { _ =>
+                  keyOf(saved).flatMap {
+                    case Some(Some(key)) =>
+                      // (the name the developer gave, unless the plan names its keys itself)
+                      val named = if (plan.apikeyTemplate.clientNamePattern.isDefined) key.copy(description = description) else key.copy(clientName = name, description = description)
+                      saveKey(named).map(_ => Some(named))
+                    case _ => None.vfuture
+                  }.map { key =>
+                    val userKey = UserKey(saved, key, plan)
+                    Results.Ok(userKey.json ++ (if (userKey.waiting) Json.obj() else Json.obj("bearer" -> key.map(_.toBearer()))))
+                  }
+                }
+            }
+          }
+        }
       }
     }
   }
-  def serveCreateApikey(api: Api, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
-    ctx.request.body.runFold(ByteString.empty)(_ ++ _).flatMap { body =>
-      val bodyJson = Json.parse(body.utf8String)
-      val nameOpt = bodyJson.select("name").asOpt[String]
-      val descriptionOpt = bodyJson.select("description").asOpt[String]
-      val enabledOpt = bodyJson.select("enabled").asOpt[Boolean]
-      val planOpt = bodyJson.select("plan").asOpt[String]
-      val clientName = nameOpt.getOrElse("New apikey")
-      (for {
-        user <- ctx.user
-        doc <- api.documentation
-        plan <- api.plans.find(p => planOpt.contains(p.id)).orElse(api.plans.headOption)
-      } yield {
-        val sub_id = s"api-plan-subscription_${IdGenerator.uuid}"
-        val clientId = IdGenerator.lowerCaseToken(16)
-        val sub = ApiSubscription(
-          location = api.location,
-          id = sub_id,
-          name = s"subscription - ${clientName}",
-          description = descriptionOpt.getOrElse(""),
-          status = ApiSubscriptionEnabled,
-          dates = ApiSubscriptionDates(
-            created_at = DateTime.now(),
-            processed_at = DateTime.now(),
-            started_at = DateTime.now(),
-            paused_at = DateTime.now(),
-            ending_at = DateTime.now(),
-            closed_at = DateTime.now(),
-          ),
-          ownerRef = user.email,
-          apiRef = api.id,
-          subscriptionKind = plan.accessModeConfiguration.map(_.apiKind).getOrElse(ApiKind.Keyless),
-          tokenRefs = if (plan.validation.isAuto) Seq(Json.obj("apikey" -> clientId)) else Seq.empty,
-          planRef = plan.id,
-          tags = Seq.empty,
-          metadata = Map(
-            "created_by" -> "otoroshi-api-portal-plugin",
-            "otoroshi-api-plan-ref" -> plan.id,
-            "otoroshi-api-plan-name" -> plan.name,
-            "otoroshi-api-client-name" -> clientName,
-            "created_at" -> DateTime.now().toString(),
-            "updated_at" -> DateTime.now().toString(),
+
+  def serveRevealApikey(portal: Portal, user: PrivateAppsUser, id: String)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
+    findUserKey(portal, user, id).flatMap {
+      case Some(userKey) if !userKey.waiting => Results.Ok(userKey.json ++ Json.obj("bearer" -> userKey.key.map(_.toBearer()))).withHeaders("Cache-Control" -> "no-store").vfuture
+      case Some(_) => jsonError(Results.BadRequest, "this key waits an approval")
+      case None => jsonError(Results.NotFound, "no such key")
+    }
+  }
+
+  def serveUpdateApikey(portal: Portal, user: PrivateAppsUser, id: String)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
+    bodyOf(portal).flatMap { body =>
+      findUserKey(portal, user, id).flatMap {
+        case None => jsonError(Results.NotFound, "no such key")
+        case Some(userKey) =>
+          val name = body.select("name").asOpt[String].map(_.trim.take(80)).filter(_.nonEmpty).getOrElse(userKey.name)
+          val description = body.select("description").asOpt[String].map(_.trim.take(500)).getOrElse(userKey.sub.description)
+          // (a key waiting an approval: never enabled by its developer)
+          val enabled = body.select("enabled").asOpt[Boolean].filter(_ => !userKey.waiting)
+          val sub = userKey.sub.copy(
+            name = name,
+            description = description,
+            status = enabled.map(e => if (e) ApiSubscriptionEnabled else ApiSubscriptionDisabled).getOrElse(userKey.sub.status),
+            metadata = userKey.sub.metadata + ("otoroshi-api-client-name" -> name)
           )
-        )
-        val newApikey = ApiKey(
-          clientId = clientId,
-          clientSecret = IdGenerator.lowerCaseToken(64),
-          clientName = clientName,
-          description = descriptionOpt.getOrElse(""),
-          authorizedEntities = Seq(ApiIdentifier(api.id)),
-          enabled = enabledOpt.getOrElse(true),
-          throttlingQuota = plan.rateLimiting.map(_.quota.window).getOrElse(RemainingQuotas.MaxValue),
-          dailyQuota = plan.rateLimiting.map(_.quota.daily).getOrElse(RemainingQuotas.MaxValue),
-          monthlyQuota = plan.rateLimiting.map(_.quota.monthly).getOrElse(RemainingQuotas.MaxValue),
-          tags = plan.tags,
-          metadata = plan.metadata ++ Map(
-            "created_by" -> "otoroshi-api-portal-plugin",
-            "otoroshi-api-ref" -> api.id,
-            "otoroshi-api-sub-ref" -> sub.id,
-            "otoroshi-api-plan-ref" -> plan.id,
-            "otoroshi-api-plan-name" -> plan.name,
-            "created_at" -> DateTime.now().toString(),
-            "updated_at" -> DateTime.now().toString(),
-          ),
-          location = api.location,
-        )
+          val key = userKey.key.map { k =>
+            val named = if (userKey.plan.apikeyTemplate.clientNamePattern.isDefined) k else k.copy(clientName = name)
+            named.copy(description = description, enabled = enabled.getOrElse(k.enabled))
+          }
+          for {
+            _ <- env.datastores.apiSubscriptionDataStore.set(sub)
+            _ <- key.map(saveKey).getOrElse(true.vfuture)
+          } yield Results.Ok(UserKey(sub, key, userKey.plan).json)
+      }
+    }
+  }
+
+  def serveDeleteApikey(portal: Portal, user: PrivateAppsUser, id: String)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
+    findUserKey(portal, user, id).flatMap {
+      case None => jsonError(Results.NotFound, "no such key")
+      case Some(userKey) =>
+        val keys = userKey.sub.tokenRefs.flatMap(_.select("apikey").asOpt[String])
         if (env.clusterConfig.mode.isWorker) {
-          if (plan.validation.isAuto) {
-            ClusterAgent.clusterSaveApikey(env, newApikey)(using ec, env.otoroshiMaterializer)
-          }
-          // TODO: implement it
-          // ClusterAgent.clusterSaveSub(env, sub)(using ec, env.otoroshiMaterializer)
-          // ClusterAgent.clusterSaveApi(env, sub)(using ec, env.otoroshiMaterializer)
+          keys.foreach(k => ClusterAgent.clusterDeleteApikey(env, k)(using ec, env.otoroshiMaterializer))
         }
-        // TODO: right now api plan does not store subscription refs but maybe we will need it
-        // env.datastores.apiDataStore.set(api.copy(consumers = api.consumers.map { c =>
-        //   if (c.id == consumer.id) {
-        //     c.copy(
-        //       subscriptions = c.subscriptions :+ ApiConsumerSubscriptionRef(sub_id),
-        //     )
-        //   } else {
-        //     c
-        //   }
-        // })).flatMap { _ =>
-          env.datastores.apiSubscriptionDataStore.set(sub).flatMap { _ =>
-            if (plan.validation.isAuto) {
-              env.datastores.apiKeyDataStore.set(newApikey).map { _ =>
-                Results.Ok(Json.obj(
-                  "client_id" -> newApikey.clientId,
-                  "name" -> newApikey.clientName,
-                  "description" -> newApikey.description,
-                  "bearer" -> newApikey.toBearer(),
-                  "enabled" -> newApikey.enabled,
-                  "sub" -> sub.id,
-                  "plan" -> plan.id,
-                  "status" -> "validated",
-                )).as("application/json")
-              }
-            } else {
-              Results.Ok(Json.obj(
-                "client_id" -> newApikey.clientId,
-                "name" -> newApikey.clientName,
-                "description" -> newApikey.description,
-                "bearer" -> "--",
-                "enabled" -> false,
-                "sub" -> sub.id,
-                "plan" -> plan.id,
-                "status" -> "waiting-approval",
-              )).as("application/json").vfuture
-            }
-          }
-        //}
-      }).getOrElse {
-        Results.BadRequest(Json.obj("error" -> "bad request")).vfuture
-      }
+        for {
+          _ <- Future.sequence(keys.map(k => env.datastores.apiKeyDataStore.delete(k)))
+          _ <- env.datastores.apiSubscriptionDataStore.delete(userKey.sub.id)
+        } yield Results.NoContent
     }
   }
-  def serveDeleteApikey(api: Api, client_id: String, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
-    ctx.user match {
-      case None => Results.Unauthorized(Json.obj("error" -> "user not found")).vfuture
-      case Some(user) => env.datastores.apiKeyDataStore.findById(client_id).flatMap {
-        case None => Results.Unauthorized(Json.obj("error" -> "apikey not found")).vfuture
-        case Some(apikey) => {
-          apikey.metadata.get("otoroshi-api-sub-ref") match {
-            case None => Results.Unauthorized(Json.obj("error" -> "sref not found")).vfuture
-            case Some(sub_id) =>
-              env.datastores.apiSubscriptionDataStore.findById(sub_id).flatMap {
-                case None => Results.Unauthorized(Json.obj("error" -> "sub not found")).vfuture
-                case Some(sub) if sub.apiRef != api.id => Results.Unauthorized(Json.obj("error" -> "bad sub")).vfuture
-                case Some(sub) => {
-                  if (env.clusterConfig.mode.isWorker) {
-                    ClusterAgent.clusterDeleteApikey(env, apikey.clientId)(using ec, env.otoroshiMaterializer)
-                    // TODO: implement it
-                    // ClusterAgent.clusterDeleteSub(env, sub)(using ec, env.otoroshiMaterializer)
-                    // ClusterAgent.clusterDeleteApi(env, sub)(using ec, env.otoroshiMaterializer)
-                  }
-                  // TODO: here plans don't store sub refs
-                  //env.datastores.apiDataStore.set(api.copy(consumers = api.consumers.map { c =>
-                  //  if (c.id == consumer.id) {
-                  //    c.copy(
-                  //      subscriptions = c.subscriptions.filterNot(_.ref == sub_id),
-                  //    )
-                  //  } else {
-                  //    c
-                  //  }
-                  //})).flatMap { _ =>
-                  env.datastores.apiSubscriptionDataStore.delete(sub.id).flatMap { _ =>
-                    env.datastores.apiKeyDataStore.delete(apikey.clientId).map { _ =>
-                      Results.NoContent
-                    }
-                  }
-                  //}
-                }
-              }
-            }
-          }
-        }
-      }
-  }
-  def serveUpdateApikey(api: Api, client_id: String, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
-    ctx.request.body.runFold(ByteString.empty)(_ ++ _).flatMap { body =>
-      val bodyJson = Json.parse(body.utf8String)
-      val nameOpt = bodyJson.select("name").asOpt[String]
-      val descriptionOpt = bodyJson.select("description").asOpt[String]
-      val enabledOpt = bodyJson.select("enabled").asOpt[Boolean]
-      ctx.user match {
-        case None => Results.Unauthorized(Json.obj("error" -> "user not found")).vfuture
-        case Some(user) => env.datastores.apiKeyDataStore.findById(client_id).flatMap {
-          case None => Results.Unauthorized(Json.obj("error" -> "apikey not found")).vfuture
-          case Some(apikey) => {
-            apikey.metadata.get("otoroshi-api-plan-ref") match {
-              case None => Results.Unauthorized(Json.obj("error" -> "cref not found")).vfuture
-              case Some(plan_id) => apikey.metadata.get("otoroshi-api-sub-ref") match {
-                case None => Results.Unauthorized(Json.obj("error" -> "sref not found")).vfuture
-                case Some(sub_id) => api.plans.filter(c => c.status == ApiPlanStatus.Published).find(_.id == plan_id) match {
-                  case None => Results.Unauthorized(Json.obj("error" -> "plan not found")).vfuture
-                  case Some(plan) => Option(sub_id) match { // TODO: need to store sub refs on plan ?
-                    case None => Results.Unauthorized(Json.obj("error" -> "subref not found")).vfuture
-                    case Some(subRef) => env.datastores.apiSubscriptionDataStore.findById(subRef).flatMap {
-                      case Some(sub) if sub.ownerRef == user.email => {
-                        val newApikey = apikey.copy(
-                          clientName = nameOpt.getOrElse(apikey.clientName),
-                          description = descriptionOpt.getOrElse(apikey.description),
-                          enabled = enabledOpt.getOrElse(apikey.enabled),
-                        )
-                        if (env.clusterConfig.mode.isWorker) {
-                          ClusterAgent.clusterSaveApikey(env, newApikey)(using ec, env.otoroshiMaterializer)
-                          // TODO
-                          // ClusterAgent.clusterSaveSub(env, sub)(using ec, env.otoroshiMaterializer)
-                        }
-                        env.datastores.apiSubscriptionDataStore.set(sub.copy(name = s"subscription - ${newApikey.clientName}", description = newApikey.description)).flatMap { _ =>
-                          if (plan.validation.isAuto && sub.status == ApiSubscriptionEnabled) {
-                            env.datastores.apiKeyDataStore.set(newApikey).map { _ =>
-                              Results.Ok(Json.obj(
-                                "client_id" -> newApikey.clientId,
-                                "name" -> newApikey.clientName,
-                                "description" -> newApikey.description,
-                                "bearer" -> newApikey.toBearer(),
-                                "enabled" -> newApikey.enabled,
-                                "sub" -> sub.id,
-                                "plan" -> plan.id,
-                                "status" -> "validated"
-                              )).as("application/json")
-                            }
-                          } else {
-                            Results.Ok(Json.obj(
-                              "client_id" -> newApikey.clientId,
-                              "name" -> newApikey.clientName,
-                              "description" -> newApikey.description,
-                              "bearer" -> "--",
-                              "enabled" -> false,
-                              "sub" -> sub.id,
-                              "plan" -> plan.id,
-                              "status" -> "waiting-approval",
-                            )).as("application/json").vfuture
-                          }
-                        }
-                      }
-                      case _ => Results.Unauthorized(Json.obj("error" -> "sub not found")).vfuture
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-
-  //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-  def renderResourceAsIcon(resource: Option[ApiDocumentationResource], doc: ApiDocumentation, style: Option[String] = None): String = {
-    resource match {
-      case Some(resource) if resource.css_icon_class.isDefined => s"""<i class="${resource.css_icon_class.get}"></i> """
-      case Some(resource) if resource.text_content.exists(_.startsWith("bi ")) => s"""<i class="${resource.text_content.get}"></i> """
-      case Some(resource) if resource.text_content.isDefined => s"""<span class="portal-icon-text">${resource.text_content.get}</span> """
-      case Some(resource) if resource.resolveUrl(doc).isDefined => s"""<img src="${resource.resolveUrl(doc).get}" style="${resource.raw.select("style").asOptString.orElse(style).getOrElse("")}" /> """
-      case Some(resource) if resource.base64_content.isDefined => s"""<img src="data:${resource.contentType};base64,${resource.base64_content.get}" style="${resource.raw.select("style").asOptString.orElse(style).getOrElse("")}" /> """
-      case _ => ""
-    }
-  }
-
-  def renderResource(resource: ApiDocumentationResource, doc: ApiDocumentation)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[(ByteString, String)] = {
-    def handleTransform(byteString: ByteString): ByteString = {
-      // TODO: handle EL
-      if (resource.transform.contains("markdown")) {
-        val content =
-          s"""<zero-md class="portal-markdown">
-             |  <template>
-             |    <style>
-             |      :host {
-             |        display: block;
-             |        color: #0f172a;
-             |      }
-             |
-             |      .markdown-body {
-             |        background: transparent !important;
-             |        color: #334155 !important;
-             |        font-family: "Manrope", ui-sans-serif, system-ui, sans-serif !important;
-             |        line-height: 1.75 !important;
-             |      }
-             |
-             |      .markdown-body h1,
-             |      .markdown-body h2,
-             |      .markdown-body h3,
-             |      .markdown-body h4,
-             |      .markdown-body h5,
-             |      .markdown-body h6 {
-             |        color: #020617 !important;
-             |        letter-spacing: -0.03em;
-             |        border-bottom-color: rgba(148, 163, 184, 0.22) !important;
-             |      }
-             |
-             |      .markdown-body a {
-             |        color: #0284c7 !important;
-             |      }
-             |
-             |      .markdown-body p,
-             |      .markdown-body li,
-             |      .markdown-body blockquote {
-             |        color: #475569 !important;
-             |      }
-             |
-             |      .markdown-body pre {
-             |        background: #020617 !important;
-             |        color: #e2e8f0 !important;
-             |        border-radius: 1rem !important;
-             |        padding: 1rem !important;
-             |      }
-             |
-             |      .markdown-body code {
-             |        font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, monospace !important;
-             |      }
-             |
-             |      .markdown-body :not(pre) > code {
-             |        background: rgba(148, 163, 184, 0.14) !important;
-             |        color: #0f172a !important;
-             |        border-radius: 0.5rem !important;
-             |        padding: 0.15rem 0.4rem !important;
-             |      }
-             |
-             |      .markdown-body table th,
-             |      .markdown-body table td {
-             |        border-color: rgba(148, 163, 184, 0.22) !important;
-             |      }
-             |
-             |      .markdown-body blockquote {
-             |        border-left-color: rgba(14, 165, 233, 0.35) !important;
-             |      }
-             |
-             |      :host-context(.dark) {
-             |        color: #f8fafc;
-             |      }
-             |
-             |      :host-context(.dark) .markdown-body {
-             |        background: transparent !important;
-             |        color: #cbd5e1 !important;
-             |      }
-             |
-             |      :host-context(.dark) .markdown-body h1,
-             |      :host-context(.dark) .markdown-body h2,
-             |      :host-context(.dark) .markdown-body h3,
-             |      :host-context(.dark) .markdown-body h4,
-             |      :host-context(.dark) .markdown-body h5,
-             |      :host-context(.dark) .markdown-body h6 {
-             |        color: #f8fafc !important;
-             |        border-bottom-color: rgba(255, 255, 255, 0.08) !important;
-             |      }
-             |
-             |      :host-context(.dark) .markdown-body p,
-             |      :host-context(.dark) .markdown-body li,
-             |      :host-context(.dark) .markdown-body blockquote {
-             |        color: #cbd5e1 !important;
-             |      }
-             |
-             |      :host-context(.dark) .markdown-body a {
-             |        color: #38bdf8 !important;
-             |      }
-             |
-             |      :host-context(.dark) .markdown-body pre {
-             |        background: #020617 !important;
-             |        color: #e2e8f0 !important;
-             |      }
-             |
-             |      :host-context(.dark) .markdown-body :not(pre) > code {
-             |        background: rgba(255, 255, 255, 0.08) !important;
-             |        color: #f8fafc !important;
-             |      }
-             |
-             |      :host-context(.dark) .markdown-body table th,
-             |      :host-context(.dark) .markdown-body table td {
-             |        border-color: rgba(255, 255, 255, 0.08) !important;
-             |      }
-             |
-             |      :host-context(.dark) .markdown-body blockquote {
-             |        border-left-color: rgba(56, 189, 248, 0.35) !important;
-             |      }
-             |    </style>
-             |  </template>
-             |  <script type="text/markdown">${byteString.utf8String}</script>
-             |</zero-md>""".stripMargin
-        resource.transform_wrapper match {
-          case None => ByteString(content)
-          case Some(wrapper) => ByteString(wrapper.replace("{content}", content))
-        }
-      } else if (resource.transform.contains("redoc")) {
-        val content = s"""<redoc
-                      |   spec-url="${resource.path.headOption.getOrElse("#")}"
-                      |   hideHostname="false"
-                      |   showObjectSchemaExamples="true"
-                      |></redoc>""".stripMargin
-        resource.transform_wrapper match {
-          case None => ByteString(content)
-          case Some(wrapper) => ByteString(wrapper.replace("{content}", content))
-        }
-      } else {
-        byteString
-      }
-    }
-    resource.resolveUrl(doc) match {
-      case Some(url) => env.Ws.url(url)
-        .withFollowRedirects(resource.httpFollowRedirects)
-        .withHttpHeaders(resource.httpHeaders.toSeq*)
-        .withRequestTimeout(resource.httpTimeout)
-        .get() map { resp =>
-          (handleTransform(resp.bodyAsBytes), resource.contentType)
-        }
-      case None => {
-        resource.base64_content match {
-          case Some(bs) => (bs, resource.contentType).vfuture
-          case None => resource.json_content match {
-            case Some(json) => (json.stringify.byteString, resource.contentType).vfuture
-            case None => resource.text_content match {
-              case Some(text) => (handleTransform(ByteString(text)), resource.contentType).vfuture
-              case None => (ByteString("no content"), resource.contentType).vfuture
-            }
-          }
-        }
-      }
-    }
-  }
-
-  def documentationPageTemplate(title: String, prefix: String, api: Api, doc: ApiDocumentation, sidebar: ApiDocumentationSidebar, ctx: NgbBackendCallContext, noInnerPadding: Boolean = false)(content: String)(using env: Env, ec: ExecutionContext, mat: Materializer) = {
-    val sidebarId = "portalDocSidebar"
-    val sidebarHtml =
-      s"""<aside class="xl:sticky xl:top-28 xl:self-start">
-         |  <div class="rounded-3xl border border-slate-200/80 bg-white/80 p-5 shadow-sm backdrop-blur dark:border-white/10 dark:bg-slate-900/70">
-         |    <div class="mb-4 flex items-center justify-between gap-3">
-         |      <div>
-         |        <p class="text-[11px] font-bold uppercase tracking-[0.18em] text-sky-600 dark:text-sky-400">Browse</p>
-         |        <h2 class="mt-2 text-base font-semibold tracking-tight text-slate-950 dark:text-white">${sidebar.label}</h2>
-         |      </div>
-         |      <button class="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm xl:hidden dark:border-white/10 dark:bg-slate-800 dark:text-slate-200" type="button" data-portal-toggle="${sidebarId}">
-         |        <i class="bi bi-list"></i>
-         |        <span>Sections</span>
-         |      </button>
-         |    </div>
-         |    <nav id="${sidebarId}" class="hidden space-y-3 xl:block">
-         |      ${sidebarTemplate(sidebar, prefix, doc, ctx)}
-         |    </nav>
-         |  </div>
-         |</aside>""".stripMargin
-    val railHtml =
-      s"""<aside class="xl:sticky xl:top-28 xl:self-start">
-         |  <div class="rounded-3xl border border-slate-200/80 bg-white/80 p-5 shadow-sm backdrop-blur dark:border-white/10 dark:bg-slate-900/70">
-         |    <p class="text-[11px] font-bold uppercase tracking-[0.18em] text-sky-600 dark:text-sky-400">Quick links</p>
-         |    <h2 class="mt-2 text-base font-semibold tracking-tight text-slate-950 dark:text-white">Keep moving</h2>
-         |    <p class="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-400">Jump between guides, reference material and self-service access without losing context.</p>
-         |    <div class="mt-5 space-y-3">
-         |      <a class="inline-flex w-full items-center justify-center gap-2 rounded-full bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:-translate-y-0.5 dark:bg-white dark:text-slate-950" href="${prefix}/api-references">API reference</a>
-         |      ${if (ctx.user.isDefined && api.plans.exists(_.accessModeConfiguration.map(_.apiKind).getOrElse(ApiKind.Keyless) != ApiKind.Keyless)) {
-              s"""<a class="inline-flex w-full items-center justify-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:-translate-y-0.5 dark:border-white/10 dark:bg-slate-800 dark:text-slate-200" href="${prefix}/subscriptions">Subscriptions</a>"""
-            } else ""}
-         |    </div>
-         |    <dl class="mt-6 grid grid-cols-3 gap-3">
-         |      <div class="rounded-2xl bg-stone-100/80 px-3 py-3 dark:bg-white/5">
-         |        <dt class="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">Specs</dt>
-         |        <dd class="mt-2 text-lg font-semibold text-slate-950 dark:text-white">${doc.references.size}</dd>
-         |      </div>
-         |      <div class="rounded-2xl bg-stone-100/80 px-3 py-3 dark:bg-white/5">
-         |        <dt class="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">Plans</dt>
-         |        <dd class="mt-2 text-lg font-semibold text-slate-950 dark:text-white">${api.plans.count(_.status == ApiPlanStatus.Published)}</dd>
-         |      </div>
-         |    </dl>
-         |  </div>
-         |</aside>""".stripMargin
-    baseTemplate(title, prefix, api, doc, ctx)(
-      s"""<section class="pb-14 pt-8 lg:pt-10">
-         |  <div class="container-xxl grid gap-6 xl:grid-cols-[260px_minmax(0,1fr)_260px]">
-         |    ${sidebarHtml}
-         |    <article class="min-w-0 overflow-hidden rounded-[28px] border border-slate-200/80 bg-white/85 shadow-sm backdrop-blur dark:border-white/10 dark:bg-slate-900/75">
-         |      <div class="${if (noInnerPadding) "" else "px-6 py-6 sm:px-8 sm:py-8 "}prose prose-slate max-w-none dark:prose-invert prose-headings:tracking-tight prose-headings:text-slate-950 dark:prose-headings:text-white prose-p:text-slate-600 dark:prose-p:text-slate-300 prose-a:text-sky-600 dark:prose-a:text-sky-400 prose-code:text-slate-900 dark:prose-code:text-slate-100 prose-pre:bg-slate-950 prose-pre:text-slate-50">
-         |        ${content}
-         |      </div>
-         |    </article>
-         |    <div class="hidden xl:block">${railHtml}</div>
-         |  </div>
-         |</section>
-         |""".stripMargin)
-  }
-
-  def sidebarCategoryTemplate(item: ApiDocumentationSidebarCategory, prefix: String, index: Int, doc: ApiDocumentation, ctx: NgbBackendCallContext): String = {
-    s"""<details class="group rounded-2xl border border-slate-200/80 bg-stone-50/70 p-1 dark:border-white/10 dark:bg-white/5" open>
-       |  <summary class="flex cursor-pointer list-none items-center justify-between gap-3 rounded-xl px-3 py-3 text-sm font-semibold text-slate-900 dark:text-slate-100">
-       |    <span class="inline-flex items-center gap-2">${renderResourceAsIcon(item.icon, doc)}${item.label}</span>
-       |    <i class="bi bi-chevron-right"></i>
-       |  </summary>
-       |  <div class="space-y-1 px-2 pb-2 pt-1">
-       |    ${item.links.map(l => sidebarLinkTemplate(l, prefix, doc, ctx)).mkString("\n")}
-       |  </div>
-       |</details>""".stripMargin
-  }
-
-  def sidebarLinkTemplate(item: ApiDocumentationSidebarLink, prefix: String, doc: ApiDocumentation, ctx: NgbBackendCallContext): String = {
-    s"""<a class="flex min-h-[40px] items-center gap-2 rounded-xl px-3 py-2 text-sm ${if(ctx.request.path == s"${prefix}${item.link}") "bg-white font-semibold text-slate-950 shadow-sm dark:bg-slate-800 dark:text-white" else "text-slate-600 transition hover:bg-white hover:text-slate-950 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"}" href="${prefix}${item.link}">
-       |  <span class="inline-flex items-center justify-center text-slate-400 dark:text-slate-500">${renderResourceAsIcon(item.icon, doc)}</span>
-       |  <span>${item.label}</span>
-       |</a>""".stripMargin
-  }
-
-  def sidebarTemplate(sidebar: ApiDocumentationSidebar, prefix: String, doc: ApiDocumentation, ctx: NgbBackendCallContext): String = {
-    sidebar.items.zipWithIndex.map {
-      case (item @ ApiDocumentationSidebarCategory(_), idx) => sidebarCategoryTemplate(item, prefix, idx, doc, ctx)
-      case (item @ ApiDocumentationSidebarLink(_), idx) => sidebarLinkTemplate(item, prefix, doc, ctx)
-    }.mkString("\n")
-  }
-
-  def navPathActive(paths: Seq[String], ctx: NgbBackendCallContext, prefix: String): String = {
-    val path = ctx.request.path.replaceFirst(prefix, "").toLowerCase()
-    if (paths.exists(p => path.startsWith(p))) {
-      "bg-white text-slate-950 shadow-sm ring-1 ring-slate-200 dark:bg-slate-800 dark:text-white dark:ring-white/10"
-    } else {
-      "text-slate-500 hover:bg-white/80 hover:text-slate-950 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
-    }
-  }
-
-  def apikeyModalComponent(): String = {
-    s"""
-       |<div class="portal-modal fixed inset-0 z-[120] hidden items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm" id="apiKeyEditorModal" aria-hidden="true">
-       |  <div class="w-full max-w-3xl">
-       |    <div class="overflow-hidden rounded-[28px] border border-slate-200/80 bg-white shadow-2xl dark:border-white/10 dark:bg-slate-900">
-       |      <div class="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-5 dark:border-white/10">
-       |        <div>
-       |          <p class="text-[11px] font-bold uppercase tracking-[0.18em] text-sky-600 dark:text-sky-400">Credentials</p>
-       |          <div class="mt-2 flex flex-wrap items-center gap-3">
-       |            <h2 id="apiKeyEditorTitle" class="text-xl font-semibold tracking-tight text-slate-950 dark:text-white">Create API key</h2>
-       |            <span class="inline-flex items-center rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:bg-white/10 dark:text-slate-300" id="apiKeyEditorModeBadge" hidden>update</span>
-       |          </div>
-       |        </div>
-       |        <button type="button" class="inline-flex h-10 w-10 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 shadow-sm transition hover:text-slate-950 dark:border-white/10 dark:bg-slate-800 dark:text-slate-300 dark:hover:text-white" data-modal-close="apiKeyEditorModal" aria-label="Close">
-       |          <i class="bi bi-x-lg"></i>
-       |        </button>
-       |      </div>
-       |      <div class="max-h-[calc(100vh-14rem)] overflow-auto px-6 py-6">
-       |        <form id="apiKeyEditorForm" class="space-y-5">
-       |          <div id="apiKeyEditorClientIdRow" class="space-y-2" hidden>
-       |            <label for="apiKeyEditorClientId" class="text-sm font-medium text-slate-700 dark:text-slate-200">Client ID</label>
-       |            <input type="text" class="w-full rounded-2xl border border-slate-200 bg-stone-50 px-4 py-3 font-mono text-sm text-slate-900 outline-none dark:border-white/10 dark:bg-slate-800 dark:text-slate-100" id="apiKeyEditorClientId" readonly />
-       |          </div>
-       |
-       |          <div class="space-y-2">
-       |            <label for="apiKeyEditorName" class="text-sm font-medium text-slate-700 dark:text-slate-200">Name</label>
-       |            <input type="text" class="w-full rounded-2xl border border-slate-200 bg-stone-50 px-4 py-3 text-slate-900 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100 dark:border-white/10 dark:bg-slate-800 dark:text-slate-100 dark:focus:ring-sky-500/20" id="apiKeyEditorName" data-autofocus />
-       |          </div>
-       |
-       |          <div class="space-y-2">
-       |            <label for="apiKeyEditorDesc" class="text-sm font-medium text-slate-700 dark:text-slate-200">Description</label>
-       |            <textarea id="apiKeyEditorDesc" class="min-h-[128px] w-full rounded-2xl border border-slate-200 bg-stone-50 px-4 py-3 text-slate-900 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100 dark:border-white/10 dark:bg-slate-800 dark:text-slate-100 dark:focus:ring-sky-500/20" rows="4" spellcheck="false"></textarea>
-       |          </div>
-       |
-       |          <label class="inline-flex items-center gap-3 text-sm font-medium text-slate-700 dark:text-slate-200">
-       |            <input type="checkbox" id="apiKeyEditorEnabled" class="h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-500" />
-       |            <span>Enabled</span>
-       |          </label>
-       |
-       |          <div id="apiKeyEditorPlanRow" class="space-y-2">
-       |            <label for="apiKeyEditorPlan" class="text-sm font-medium text-slate-700 dark:text-slate-200">Plan</label>
-       |            <select id="apiKeyEditorPlan" class="w-full rounded-2xl border border-slate-200 bg-stone-50 px-4 py-3 text-slate-900 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100 dark:border-white/10 dark:bg-slate-800 dark:text-slate-100 dark:focus:ring-sky-500/20">
-       |              <option value="">Choose a plan</option>
-       |            </select>
-       |            <p class="text-sm text-slate-500 dark:text-slate-400" id="apiKeyEditorPlanHelp"></p>
-       |          </div>
-       |
-       |          <div id="apiKeyEditorPlanDisplay" class="space-y-2" hidden>
-       |            <label for="apiKeyEditorDisplay" class="text-sm font-medium text-slate-700 dark:text-slate-200">Plan</label>
-       |            <input type="text" class="w-full rounded-2xl border border-slate-200 bg-stone-50 px-4 py-3 text-slate-900 outline-none dark:border-white/10 dark:bg-slate-800 dark:text-slate-100" id="apiKeyEditorDisplay" readonly />
-       |            <p class="text-sm text-slate-500 dark:text-slate-400" id="apiKeyEditorPlanHelp2"></p>
-       |          </div>
-       |
-       |          <div id="apiKeyEditorBearerRow" class="space-y-2" hidden>
-       |            <label for="apiKeyEditorBearer" class="text-sm font-medium text-slate-700 dark:text-slate-200">Bearer</label>
-       |            <div class="flex flex-wrap gap-2 sm:flex-nowrap">
-       |              <input type="password" class="min-w-0 flex-1 rounded-2xl border border-slate-200 bg-stone-50 px-4 py-3 font-mono text-sm text-slate-900 outline-none dark:border-white/10 dark:bg-slate-800 dark:text-slate-100" id="apiKeyEditorBearer" readonly />
-       |              <button class="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:-translate-y-0.5 dark:border-white/10 dark:bg-slate-800 dark:text-slate-200" type="button" id="apiKeyEditorToggleBearer">Show</button>
-       |              <button class="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:-translate-y-0.5 dark:border-white/10 dark:bg-slate-800 dark:text-slate-200" type="button" id="apiKeyEditorCopyBearer">Copy</button>
-       |            </div>
-       |          </div>
-       |        </form>
-       |      </div>
-       |      <div class="flex items-center justify-between gap-4 border-t border-slate-200 px-6 py-5 dark:border-white/10">
-       |        <div class="min-h-[20px] text-sm text-slate-500 dark:text-slate-400" id="apiKeyEditorMsg"></div>
-       |        <div class="flex items-center gap-3">
-       |          <button type="button" class="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:-translate-y-0.5 dark:border-white/10 dark:bg-slate-800 dark:text-slate-200" data-modal-close="apiKeyEditorModal">Cancel</button>
-       |          <button type="button" class="inline-flex items-center justify-center rounded-full bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:-translate-y-0.5 dark:bg-white dark:text-slate-950" id="apiKeyEditorSubmitBtn">Save</button>
-       |        </div>
-       |      </div>
-       |    </div>
-       |  </div>
-       |</div>
-       |""".stripMargin
-  }
-
-  def testerComponent(): String = {
-    s"""
-       |<div class="portal-modal fixed inset-0 z-[120] hidden items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm" id="apiTesterModal" aria-hidden="true">
-       |  <div class="w-full max-w-7xl">
-       |    <div class="flex max-h-[calc(100vh-2rem)] flex-col overflow-hidden rounded-[28px] border border-slate-200/80 bg-white shadow-2xl dark:border-white/10 dark:bg-slate-900">
-       |      <div class="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-5 dark:border-white/10">
-       |        <div class="min-w-0">
-       |          <p class="text-[11px] font-bold uppercase tracking-[0.18em] text-sky-600 dark:text-sky-400">Tester</p>
-       |          <div class="mt-2 flex flex-wrap items-center gap-3">
-       |            <span class="inline-flex items-center rounded-full bg-stone-100 px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-slate-600 dark:bg-white/10 dark:text-slate-300" id="apiTesterMethod">GET</span>
-       |            <input type="text" class="min-w-0 flex-1 rounded-2xl border border-slate-200 bg-stone-50 px-4 py-3 font-mono text-sm text-slate-900 outline-none dark:border-white/10 dark:bg-slate-800 dark:text-slate-100" id="apiTesterUrl" readonly />
-       |          </div>
-       |          <p class="mt-3 hidden text-sm text-amber-600 dark:text-amber-400" id="apiTesterSecretWarn">Headers or body look sensitive. Double-check before copying or sharing.</p>
-       |        </div>
-       |        <button type="button" class="inline-flex h-10 w-10 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 shadow-sm transition hover:text-slate-950 dark:border-white/10 dark:bg-slate-800 dark:text-slate-300 dark:hover:text-white" data-modal-close="apiTesterModal" aria-label="Close">
-       |          <i class="bi bi-x-lg"></i>
-       |        </button>
-       |      </div>
-       |      <div class="min-h-0 flex-1 overflow-auto px-6 py-6">
-       |        <div class="grid gap-5 xl:grid-cols-2">
-       |          <section class="rounded-[24px] border border-slate-200 bg-stone-50/80 p-5 dark:border-white/10 dark:bg-white/5">
-       |            <div class="mb-4 flex items-center justify-between gap-3">
-       |              <h3 class="text-base font-semibold tracking-tight text-slate-950 dark:text-white">Request</h3>
-       |              <button class="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:-translate-y-0.5 dark:border-white/10 dark:bg-slate-800 dark:text-slate-200" id="apiTesterResetHeaders" type="button">Reset headers</button>
-       |            </div>
-       |            <div class="space-y-4">
-       |              <div class="space-y-2">
-       |                <label for="apiTesterApiKeySelect" class="text-sm font-medium text-slate-700 dark:text-slate-200">API key</label>
-       |                <select id="apiTesterApiKeySelect" class="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-slate-900 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100 dark:border-white/10 dark:bg-slate-800 dark:text-slate-100 dark:focus:ring-sky-500/20">
-       |                <option value="">No API key</option>
-       |              </select>
-       |              </div>
-       |              <div class="space-y-2">
-       |                <label for="apiTesterHeaders" class="text-sm font-medium text-slate-700 dark:text-slate-200">Request headers (JSON)</label>
-       |                <textarea id="apiTesterHeaders" class="min-h-[220px] w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 font-mono text-sm text-slate-900 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100 dark:border-white/10 dark:bg-slate-800 dark:text-slate-100 dark:focus:ring-sky-500/20" spellcheck="false" placeholder='{"accept":"application/json"}'></textarea>
-       |              </div>
-       |              <div class="space-y-2">
-       |                <label for="apiTesterBody" class="text-sm font-medium text-slate-700 dark:text-slate-200">Request body (JSON)</label>
-       |                <textarea id="apiTesterBody" class="min-h-[220px] w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 font-mono text-sm text-slate-900 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100 dark:border-white/10 dark:bg-slate-800 dark:text-slate-100 dark:focus:ring-sky-500/20" spellcheck="false" placeholder='{"name":"Alice"}'></textarea>
-       |              </div>
-       |            </div>
-       |          </section>
-       |          <section class="rounded-[24px] border border-slate-200 bg-stone-50/80 p-5 dark:border-white/10 dark:bg-white/5">
-       |            <div class="mb-4 flex items-center justify-between gap-3">
-       |              <h3 class="text-base font-semibold tracking-tight text-slate-950 dark:text-white">Response</h3>
-       |              <button class="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:-translate-y-0.5 dark:border-white/10 dark:bg-slate-800 dark:text-slate-200" id="apiTesterClearResponse" type="button">Clear</button>
-       |            </div>
-       |            <div class="space-y-4">
-       |              <div class="grid gap-3 sm:grid-cols-2">
-       |                <div class="rounded-2xl bg-white px-4 py-4 dark:bg-slate-800">
-       |                  <span class="text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">Status</span>
-       |                  <strong id="apiTesterStatus" class="mt-2 block text-sm font-semibold text-slate-950 dark:text-white">-</strong>
-       |              </div>
-       |                <div class="rounded-2xl bg-white px-4 py-4 dark:bg-slate-800">
-       |                  <span class="text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">Duration</span>
-       |                  <strong id="apiTesterDuration" class="mt-2 block text-sm font-semibold text-slate-950 dark:text-white">-</strong>
-       |                </div>
-       |              </div>
-       |              <div class="space-y-2">
-       |                <label for="apiTesterRespHeaders" class="text-sm font-medium text-slate-700 dark:text-slate-200">Response headers</label>
-       |                <pre id="apiTesterRespHeaders" class="min-h-[180px] overflow-auto rounded-2xl bg-slate-950 px-4 py-4 font-mono text-sm text-slate-100"></pre>
-       |              </div>
-       |              <div class="space-y-2">
-       |                <label for="apiTesterRespBody" class="text-sm font-medium text-slate-700 dark:text-slate-200">Response body</label>
-       |                <pre id="apiTesterRespBody" class="min-h-[280px] overflow-auto rounded-2xl bg-slate-950 px-4 py-4 font-mono text-sm text-slate-100"></pre>
-       |              </div>
-       |            </div>
-       |          </section>
-       |        </div>
-       |      </div>
-       |      <div class="flex items-center justify-between gap-4 border-t border-slate-200 px-6 py-5 dark:border-white/10">
-       |        <div class="min-h-[20px] text-sm text-rose-600 dark:text-rose-400" id="apiTesterError"></div>
-       |        <div class="flex items-center gap-3">
-       |          <button type="button" class="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:-translate-y-0.5 dark:border-white/10 dark:bg-slate-800 dark:text-slate-200" data-modal-close="apiTesterModal">Close</button>
-       |          <button type="button" class="inline-flex items-center justify-center rounded-full bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:-translate-y-0.5 dark:bg-white dark:text-slate-950" id="apiTesterSendBtn">Send request</button>
-       |        </div>
-       |      </div>
-       |    </div>
-       |  </div>
-       |</div>
-       |""".stripMargin
-  }
-
-  def baseTemplate(title: String, prefix: String, api: Api, doc: ApiDocumentation, ctx: NgbBackendCallContext)(content: String): String = {
-    val userInitial = ctx.user
-      .flatMap(u => u.name.trim.headOption.orElse(u.email.trim.headOption))
-      .map(_.toUpper)
-      .getOrElse('U')
-    val identityMenu =
-      if (ctx.user.isDefined) {
-        s"""<details class="relative">
-           |  <summary class="flex list-none items-center gap-3 rounded-full border border-slate-200 bg-white px-2 py-1.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:-translate-y-0.5 dark:border-white/10 dark:bg-slate-900 dark:text-slate-200">
-           |    <span class="inline-flex h-8 w-8 items-center justify-center rounded-full bg-sky-50 text-xs font-extrabold text-sky-700 dark:bg-sky-500/15 dark:text-sky-300">${userInitial}</span>
-           |    <span class="hidden sm:inline">${ctx.user.get.name}</span>
-           |    <i class="bi bi-chevron-down"></i>
-           |  </summary>
-           |  <div class="absolute right-0 top-[calc(100%+0.75rem)] z-50 min-w-[240px] rounded-3xl border border-slate-200 bg-white p-4 shadow-glow dark:border-white/10 dark:bg-slate-900">
-           |    <div class="mb-3 border-b border-slate-200 pb-3 dark:border-white/10">
-           |      <strong>${ctx.user.get.name}</strong>
-           |      <span class="mt-1 block text-sm text-slate-500 dark:text-slate-400">${ctx.user.get.email}</span>
-           |    </div>
-           |    <a class="text-sm font-semibold text-slate-900 dark:text-white" href="${prefix}/logout">Logout</a>
-           |  </div>
-           |</details>""".stripMargin
-      } else {
-        s"""<a class="inline-flex items-center justify-center rounded-full bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:-translate-y-0.5 dark:bg-white dark:text-slate-950" href="${prefix}/login?redirect=${prefix}/">Login</a>"""
-      }
-    val navigationTabs =
-      doc.navigation
-        .map(nav => s"""<a class="inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium transition ${navPathActive(nav.path, ctx, prefix)}" href="${prefix}${nav.path.headOption.getOrElse("#")}">${renderResourceAsIcon(nav.icon, doc, Some("max-height: 18px;"))}<span>${nav.label}</span></a>""")
-        .mkString("\n")
-    val subscriptionsTab =
-      if (ctx.user.isDefined && api.plans.exists(_.accessModeConfiguration.map(_.apiKind).getOrElse(ApiKind.Keyless) != ApiKind.Keyless)) {
-        s"""<a class="inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium transition ${navPathActive(Seq("/subscriptions"), ctx, prefix)}" href="${prefix}/subscriptions"><i class="bi bi-key"></i><span>Subscriptions</span></a>"""
-      } else {
-        ""
-      }
-    s"""
-       |<!doctype html>
-       |<html lang="en">
-       |  <head>
-       |    <meta charset="utf-8" />
-       |    <meta name="viewport" content="width=device-width, initial-scale=1" />
-       |    <title>${title}</title>
-       |    <link rel="icon" href="${prefix}${doc.logo.path.headOption.getOrElse("#")}">
-       |    <link rel="preconnect" href="https://fonts.googleapis.com">
-       |    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-       |    <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
-       |    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
-       |    <script src="https://cdn.tailwindcss.com?plugins=forms,typography"></script>       |
-       |    <script>
-       |      tailwind.config = {
-       |        darkMode: 'class',
-       |        theme: {
-       |          extend: {
-       |            fontFamily: {
-       |              sans: ['Manrope', 'ui-sans-serif', 'system-ui', 'sans-serif'],
-       |              mono: ['IBM Plex Mono', 'ui-monospace', 'SFMono-Regular', 'monospace']
-       |            },
-       |            boxShadow: {
-       |              soft: '0 12px 40px rgba(15, 23, 42, 0.08)',
-       |              glow: '0 20px 60px rgba(15, 23, 42, 0.14)'
-       |            },
-       |            colors: {
-       |              portal: {
-       |                sand: '#f7f4ee',
-       |                ink: '#0f172a'
-       |              }
-       |            }
-       |          }
-       |        }
-       |      };
-       |    </script>
-       |    <link  href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet" type="text/css" />
-       |    <style type="text/tailwindcss">
-       |      @layer base {
-       |        body {
-       |          @apply min-h-screen bg-stone-50 font-sans text-slate-900 antialiased dark:bg-[#0b1020] dark:text-slate-100;
-       |          background-image:
-       |            radial-gradient(circle at top left, rgba(56, 189, 248, 0.10), transparent 28%),
-       |            radial-gradient(circle at top right, rgba(245, 158, 11, 0.08), transparent 24%);
-       |        }
-       |        a {
-       |          @apply no-underline;
-       |        }
-       |        summary::-webkit-details-marker {
-       |          display: none;
-       |        }
-       |      }
-       |      @layer components {
-       |        .container-xxl {
-       |          @apply mx-auto w-[min(1440px,calc(100vw-2rem))] px-0;
-       |        }
-       |        .portal-shell-card {
-       |          @apply rounded-[28px] border border-slate-200/80 bg-white/80 shadow-soft backdrop-blur dark:border-white/10 dark:bg-slate-900/70;
-       |        }
-       |        .portal-surface {
-       |          @apply portal-shell-card p-6 sm:p-7;
-       |        }
-       |        .portal-page-title {
-       |          @apply mt-3 text-4xl font-semibold tracking-tight text-slate-950 sm:text-5xl dark:text-white;
-       |        }
-       |        .portal-page-subtitle {
-       |          @apply mt-3 max-w-3xl text-base leading-7 text-slate-600 dark:text-slate-300;
-       |        }
-       |        .portal-eyebrow {
-       |          @apply inline-flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.18em] text-sky-600 dark:text-sky-400;
-       |        }
-       |        .portal-pill {
-       |          @apply inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold;
-       |        }
-       |        .portal-pill-success {
-       |          @apply portal-pill bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300;
-       |        }
-       |        .portal-pill-warning {
-       |          @apply portal-pill bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-300;
-       |        }
-       |        .portal-pill-muted {
-       |          @apply portal-pill bg-slate-100 text-slate-600 dark:bg-white/10 dark:text-slate-300;
-       |        }
-       |        .portal-feedback {
-       |          @apply min-h-[20px] text-sm;
-       |        }
-       |        .portal-feedback-muted {
-       |          @apply text-slate-500 dark:text-slate-400;
-       |        }
-       |        .portal-feedback-success {
-       |          @apply text-emerald-600 dark:text-emerald-400;
-       |        }
-       |        .portal-feedback-warning {
-       |          @apply text-amber-600 dark:text-amber-400;
-       |        }
-       |        .portal-feedback-danger {
-       |          @apply text-rose-600 dark:text-rose-400;
-       |        }
-       |        .portal-redoc-action {
-       |          @apply inline-flex items-center justify-center rounded-full bg-slate-950 px-3 py-1.5 text-xs font-semibold text-white shadow-sm dark:bg-white dark:text-slate-950;
-       |        }
-       |      }
-       |      redoc {
-       |        display: block;
-       |      }
-       |      .portal-redoc-shell > div,
-       |      .portal-redoc-shell redoc {
-       |        min-height: 70vh;
-       |      }
-       |      .portal-rich-content .container-xxl {
-       |        width: 100%;
-       |        max-width: 100%;
-       |      }
-       |      .portal-rich-content img {
-       |        border-radius: 1rem;
-       |      }
-       |      .portal-rich-content table {
-       |        width: 100%;
-       |        border-collapse: collapse;
-       |      }
-       |      .portal-rich-content table th,
-       |      .portal-rich-content table td {
-       |        border-bottom: 1px solid rgba(148, 163, 184, 0.2);
-       |        padding: 0.85rem;
-       |        text-align: left;
-       |      }
-       |      .portal-rich-content .card {
-       |        border: 1px solid rgba(148, 163, 184, 0.2);
-       |        border-radius: 1.5rem;
-       |        background: rgba(255,255,255,0.75);
-       |      }
-       |      .dark .portal-rich-content .card {
-       |        background: rgba(15, 23, 42, 0.72);
-       |        border-color: rgba(255,255,255,0.08);
-       |      }
-       |      .portal-redoc-action {
-       |        margin-bottom: 10px;
-       |      }
-       |    </style>
-       |  </head>
-       |  <body data-portal-prefix="${prefix}">
-       |    <div class="relative isolate">
-       |      <header class="sticky top-0 z-50 border-b border-slate-200/70 bg-stone-50/85 backdrop-blur-xl dark:border-white/10 dark:bg-[#0b1020]/80">
-       |        <div class="container-xxl flex flex-col gap-4 py-4 lg:py-5">
-       |          <div class="flex items-center justify-between gap-4">
-       |            <a class="inline-flex min-w-0 items-center gap-3" href="${prefix}/">
-       |              <span class="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-white/10 dark:bg-slate-900">
-       |                ${renderResourceAsIcon(doc.logo.some, doc, Some("max-height: 26px;"))}
-       |              </span>
-       |              <span class="truncate text-base font-extrabold tracking-tight text-slate-950 dark:text-white">${api.name}</span>
-       |            </a>
-       |
-       |            <div class="flex items-center gap-3">
-       |              <label class="hidden min-w-[18rem] items-center gap-3 rounded-full border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-500 shadow-sm lg:flex dark:border-white/10 dark:bg-slate-900 dark:text-slate-400">
-       |                <i class="bi bi-search"></i>
-       |                <input type="search" placeholder="Search docs" class="w-full border-0 bg-transparent p-0 text-slate-900 outline-none ring-0 placeholder:text-slate-400 focus:ring-0 dark:text-slate-100 dark:placeholder:text-slate-500" />
-       |              </label>
-       |              <label class="inline-flex items-center gap-3 rounded-full border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-600 shadow-sm dark:border-white/10 dark:bg-slate-900 dark:text-slate-300">
-       |                <i class="bi bi-circle-half"></i>
-       |                <select id="themeSelect" class="border-0 bg-transparent p-0 pr-7 text-sm font-medium text-slate-700 outline-none ring-0 focus:ring-0 dark:text-slate-200">
-       |                  <option value="system">System</option>
-       |                  <option value="light">Light</option>
-       |                  <option value="dark">Dark</option>
-       |                </select>
-       |              </label>
-       |              ${identityMenu}
-       |            </div>
-       |          </div>
-       |
-       |          <nav class="flex gap-2 overflow-x-auto pb-1" aria-label="Primary">
-       |            ${navigationTabs}
-       |            <a class="inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium transition ${navPathActive(Seq("/api-references"), ctx, prefix)}" href="${prefix}/api-references"><i class="bi bi-braces"></i><span>API reference</span></a>
-       |            ${subscriptionsTab}
-       |          </nav>
-       |        </div>
-       |      </header>
-       |
-       |      <main>
-       |        ${content}
-       |      </main>
-       |    </div>
-       |    ${apikeyModalComponent()}
-       |    ${testerComponent()}
-       |    <script src="https://cdn.redoc.ly/redoc/v2.5.1/bundles/redoc.standalone.js"></script>
-       |    <script type="text/javascript" src="${prefix}/portal.js"></script>
-       |    <script type="module" src="https://cdn.jsdelivr.net/npm/zero-md@3?register"></script>
-       |  </body>
-       |</html>
-       |""".stripMargin
-  }
-
 }
