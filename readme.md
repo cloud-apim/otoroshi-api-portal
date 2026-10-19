@@ -401,7 +401,7 @@ A documentation loaded from a remote `source` is kept 15 seconds before it is fe
 A second plugin, `OtoroshiApiPortalCatalog`, serves one portal for several APIs:
 
 - a home with the APIs (their name, version, description, plans, tags) and a search by text or tag
-- **My keys** for all the APIs: a developer takes a key of any plan of any API, and sees, shows, edits and revokes all their keys in one place
+- **My keys** for all the APIs: a developer picks an API then one of its plans to take a key, and sees, shows, edits and revokes all their keys in one place (`/keys?api=<slug>` opens it with that API chosen)
 - the portal of each API under `/apis/<slug>`: the very same pages as the portal of a single API (guides, API reference with *Try it*, keys of this API), with the top bar of the catalog and the API in a breadcrumb
 
 ### The catalog route

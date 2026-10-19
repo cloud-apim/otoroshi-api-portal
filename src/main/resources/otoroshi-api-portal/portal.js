@@ -197,7 +197,8 @@
       : 'no quota';
 
   function mountKeys(mount) {
-    let state = { session: null, keys: [], made: null, editing: null, notice: null, error: null, busy: false };
+    // (the API of a new key, in a catalog: the one of ?api=<slug>, or the first one)
+    let state = { session: null, keys: [], made: null, editing: null, notice: null, error: null, busy: false, chosenApi: new URLSearchParams(location.search).get('api') };
 
     const render = () => {
       const { session, keys, made, editing, notice, error, busy } = state;
@@ -223,6 +224,11 @@ ${offered.length ? `<div class="chips">${offered.map((o) => `<span class="badge 
         return;
       }
       const full = perUser && keys.length >= perUser;
+      // the plans to take a key of: in a catalog, the ones of the API chosen first
+      const keyApis = apis.filter((a) => a.plans.length);
+      const chosenApi = keyApis.find((a) => a.slug === state.chosenApi) || keyApis[0];
+      const option = (o, i) => `<option value="${i}">${escapeHtml(o.plan.name)} — ${escapeHtml(quotaOf(o.plan.quotas))}${o.plan.validation === 'auto' ? '' : ' (on approval)'}</option>`;
+      const planOptions = (api) => offered.map((o, i) => (!multi || o.api === api ? option(o, i) : '')).join('');
       const keyRow = (k) => {
         const waiting = k.status !== 'validated';
         const actions = `${waiting ? '' : `<button type="button" class="button small" data-reveal="${escapeHtml(k.id)}">Show key</button>`}<button type="button" class="button small" data-edit="${escapeHtml(k.id)}">Edit</button><button type="button" class="button small danger" data-revoke="${escapeHtml(k.id)}">${waiting ? 'Cancel' : 'Revoke'}</button>`;
@@ -267,7 +273,8 @@ ${
 <h3>A new key</h3>
 <label>Name<input name="name" required maxlength="80" placeholder="My app" autocomplete="off"></label>
 <label>Description<input name="description" maxlength="500" placeholder="What it is for (optional)" autocomplete="off"></label>
-<label>${multi ? 'API and plan' : 'Plan'}<select name="plan">${offered.map((o, i) => `<option value="${i}">${escapeHtml(planName(o))} — ${escapeHtml(quotaOf(o.plan.quotas))}${o.plan.validation === 'auto' ? '' : ' (on approval)'}</option>`).join('')}</select></label>
+${multi ? `<label>API<select name="api">${keyApis.map((a) => `<option value="${escapeHtml(a.slug)}"${a === chosenApi ? ' selected' : ''}>${escapeHtml(a.name)}</option>`).join('')}</select></label>` : ''}
+<label>Plan<select name="plan">${planOptions(chosenApi)}</select></label>
 <p class="hint" id="plan-help"></p>
 <div><button type="submit" class="button primary" id="take"${busy ? ' disabled' : ''}></button></div>
 </form>`
@@ -282,6 +289,12 @@ ${
       if (form) {
         label();
         form.plan.addEventListener('change', label);
+        // (another API: its plans, the name and description typed kept)
+        form.elements.api?.addEventListener('change', () => {
+          state = { ...state, chosenApi: form.elements.api.value };
+          form.plan.innerHTML = planOptions(keyApis.find((a) => a.slug === state.chosenApi));
+          label();
+        });
       }
       mount.querySelector('#copy')?.addEventListener('click', (e) => {
         navigator.clipboard?.writeText(made.bearer).then(() => (e.target.textContent = 'Copied'));
