@@ -2,6 +2,8 @@
 
 A lightweight, self-contained developer portal plugin for [Otoroshi](https://www.otoroshi.io/). It turns any Otoroshi API into a full-featured portal with documentation rendering, an interactive API reference you can try requests from, and self-service API keys -- all without deploying a separate frontend application. It has the look and the features of the developer portals of [Cloud APIM Serverless](https://www.cloud-apim.com/).
 
+**Documentation: [cloud-apim.github.io/otoroshi-api-portal](https://cloud-apim.github.io/otoroshi-api-portal/)** (sources in [`documentation/`](./documentation)).
+
 ## Why use it?
 
 If you expose APIs through Otoroshi and need a developer-facing portal, you typically have two options: build a custom frontend or integrate a heavy third-party solution. This plugin offers a third path:

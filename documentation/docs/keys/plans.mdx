@@ -1,0 +1,55 @@
+---
+sidebar_position: 1
+title: Plans
+description: The plans of an API, which ones the portal shows and offers, and how their keys are given.
+---
+
+# Plans
+
+The keys of a portal are keys of the **plans of the API** (`plans` of `apis.otoroshi.io/Api`).
+
+```json
+{
+  "id": "pro",
+  "name": "Pro",
+  "description": "For production: higher quotas, on approval.",
+  "status": "published",
+  "access_mode_configuration_type": "apikey",
+  "access_mode_configuration": {},
+  "validation": { "kind": "manual" },
+  "visibility": { "kind": "public" },
+  "rate_limiting": {
+    "strategy": {
+      "id": "LegacyThrottlingStrategyConfig",
+      "quota": { "window": 100, "daily": 100000, "monthly": 2000000 }
+    }
+  }
+}
+```
+
+| Field | Description |
+|---|---|
+| `status` | `published` to show the plan; any other status hides it |
+| `visibility` | `{ "kind": "private" }` hides the plan from the portal |
+| `access_mode_configuration_type` | `apikey`: developers take keys of the plan. The other kinds (`keyless`, `jwt`, `mtls`, `oauth2-*`) are shown on the home, no key is taken of them |
+| `access_mode_configuration` | The settings of the keys of the plan (a name pattern, restrictions…) |
+| `rate_limiting` | The quotas of the keys: calls per window, per day, per month |
+| `validation` | `{ "kind": "auto" }`: a key at once. `{ "kind": "manual" }`: the key waits for an approval |
+| `tags`, `metadata` | Applied to the keys of the plan |
+
+## On the portal
+
+The published plans are cards on the home of the portal, with their quotas. The `apikey` ones enable
+**My keys**, where they are cards too: their description, their quotas, and whether the key comes
+at once or on approval.
+
+![The plans of a new key](/img/screenshots/plan-cards.png)
+
+## What a key is in Otoroshi
+
+Taking a key of a plan creates a **subscription** to it (`apis.otoroshi.io/ApiSubscription`, owned by
+the email of the developer), and Otoroshi makes its **API key** from the plan: its quotas, its tags,
+its metadata, authorized on the API. With a `manual` plan, the subscription is `pending` and its key
+disabled until the subscription is confirmed in Otoroshi.
+
+→ [Taking a key](./taking.mdx) · [Managing keys](./managing.mdx)

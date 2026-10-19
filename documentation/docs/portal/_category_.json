@@ -1,0 +1,8 @@
+{
+  "label": "The portal of an API",
+  "position": 4,
+  "link": {
+    "type": "generated-index",
+    "description": "The route of the portal, the documentation it serves, its settings, and its API reference."
+  }
+}

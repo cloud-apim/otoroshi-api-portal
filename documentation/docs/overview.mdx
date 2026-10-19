@@ -1,0 +1,69 @@
+---
+sidebar_position: 1
+title: Overview
+description: What the Otoroshi API Portal plugins add to Otoroshi, and how their pieces fit together.
+---
+
+# Overview
+
+The Otoroshi API Portal is a set of two [Otoroshi](https://www.otoroshi.io/) plugins that serve
+**developer portals** for the APIs you expose through the gateway: their **documentation**, an **API
+reference you can send requests from**, and **self-service API keys**. It has the look and the
+features of the developer portals of Cloud APIM Serverless.
+
+![The home of a portal](/img/screenshots/home.png)
+
+## Why it sits in the gateway
+
+A developer portal usually means a frontend to deploy, a database of its own, and a synchronisation
+with the gateway that issues the keys. This one is a plugin of the gateway:
+
+- **nothing else to run**: the pages are served by Otoroshi, on the route you give them
+- **configuration as data**: the portal is the `documentation` section of an Otoroshi API, or a JSON
+  file loaded from a URL, so it can live in git next to your API
+- **real keys**: a key taken on the portal is an Otoroshi subscription to a plan of the API, and the
+  API key Otoroshi makes from it — the same entities you manage in the admin
+
+## Two plugins
+
+<div class="row">
+  <div class="col col--6">
+
+### Otoroshi API Portal
+
+The portal of **one API**, on its own domain (or under a path prefix): a home, guides, the API
+reference, and the keys of the developer.
+
+→ [Set up the portal of an API](./portal/setup.mdx)
+
+  </div>
+  <div class="col col--6">
+
+### Otoroshi API Portal Catalog
+
+A portal for **several APIs**, picked by id, tags or metadata: a home listing them with a search,
+the keys of the developer for all of them, and the portal of each API under `/apis/<slug>`.
+
+→ [Set up a catalog](./catalog.mdx)
+
+  </div>
+</div>
+
+## What a developer gets
+
+| | |
+|---|---|
+| **Guides** | Markdown or HTML pages, inline or fetched from a URL, with a sidebar, a table of contents, highlighted code and previous / next links |
+| **API reference** | Your OpenAPI specifications rendered with [Scalar](https://github.com/scalar/scalar), and its client to send requests, through the portal to the Otoroshi gateway |
+| **API keys** | Plans shown as cards, a key at once or on approval, its usage against its quotas, its secret rotated, ready-to-paste requests in curl, JavaScript and Python |
+| **One sign in** | Your Otoroshi auth module: the portal stays public, developers sign in to take keys |
+
+## What you configure
+
+| | |
+|---|---|
+| **An API** | An Otoroshi API (`apis.otoroshi.io/Api`) with a `documentation` section, and the plans developers take keys of |
+| **A route** | An Otoroshi route on the domain of the portal, with an auth module and the portal plugin |
+| **The look** | A few `portal.*` metadata: title, accent color, theme, links, terms of use… |
+
+→ [Install](./install.mdx) · [Quickstart](./quickstart.mdx)

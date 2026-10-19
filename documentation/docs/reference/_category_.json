@@ -1,0 +1,8 @@
+{
+  "label": "Reference",
+  "position": 7,
+  "link": {
+    "type": "generated-index",
+    "description": "The routes the plugins serve, what they keep safe, and a complete example."
+  }
+}

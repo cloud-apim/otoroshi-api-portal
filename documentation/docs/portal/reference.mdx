@@ -1,0 +1,56 @@
+---
+sidebar_position: 4
+title: API reference and Try it
+description: The specifications rendered with Scalar, and the requests developers send from them through the gateway.
+---
+
+# API reference and Try it
+
+The API reference renders the specifications of the API with [Scalar](https://github.com/scalar/scalar),
+and its client lets developers send requests from the portal.
+
+![The API reference](/img/screenshots/openapi.png)
+
+## Specifications
+
+Each entry of `references` points at a specification, JSON or YAML:
+
+| Field | Type | Description |
+|---|---|---|
+| `title` | `string` | Its name |
+| `link` | `string` | The `path` of the resource with the specification (e.g. `/openapi.json`), or an `https://` address |
+| `description` | `string` | Its summary, on its card |
+| `icon` | `object` | Its icon on its card (`{ "css_icon_class": "bi bi-rocket" }`) |
+
+With one specification, `/api-references` shows it. With several, it lists them, and each one is at
+`/api-references/<link>`. A resource with `"transform": "scalar"` is also shown as a specification.
+
+## The specification the reference reads
+
+The reference reads the specification through the portal (`/api/openapi?link=<link>`), with:
+
+- **the gateway of the API as its first server**: `<scheme>://<domain of the API><context path of the API>`,
+  with the scheme and the port the portal is read with. The servers of the specification follow,
+  their relative addresses made absolute. Turn it off with `portal.reference.gateway_server: false`.
+- **the keys of the developers as its security scheme**, when the API has `apikey` plans:
+  `otoroshi_apikey`, a bearer token (`Authorization: Bearer <key>`), required by the specification
+  and offered on the operations that ask for their own security.
+
+## The key of the reference
+
+A signed in developer picks one of their keys in the top bar (*Tester key*): it is put in the
+authentication of the reference for this tab. *Use it in the reference*, on a key of
+[My keys](../keys/managing.mdx), does the same in one click. A signed out developer sees *Sign in to
+use your keys* instead.
+
+## Where the requests go
+
+The requests sent from the reference go **through the portal** (`/api/_proxy`, the `proxyUrl` of
+Scalar):
+
+- the browser needs no CORS from the API
+- the portal only sends them to **the hosts of the API**: the domain of the API and the servers of
+  its specifications. Anything else is refused (`403`)
+- the cookies of the portal are **never** sent; a cookie the developer sets in the client is
+- the response comes back as the API gave it, without what would apply to the portal itself
+  (`Set-Cookie`, `Strict-Transport-Security`…)

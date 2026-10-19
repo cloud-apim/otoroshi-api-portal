@@ -1,0 +1,70 @@
+/**
+ * Global styles. Infima variables are overridden here.
+ * The palette is the one of the portal itself: an indigo accent on quiet surfaces, Plus Jakarta Sans.
+ */
+
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@200..800&display=swap');
+
+:root {
+  --ifm-color-primary: #4f46e5;
+  --ifm-color-primary-dark: #3f37db;
+  --ifm-color-primary-darker: #3b33cf;
+  --ifm-color-primary-darkest: #3029aa;
+  --ifm-color-primary-light: #6760e8;
+  --ifm-color-primary-lighter: #736dea;
+  --ifm-color-primary-lightest: #9692ef;
+  --ifm-font-family-base: 'Plus Jakarta Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --ifm-heading-font-weight: 800;
+  --ifm-code-font-size: 92%;
+  --ifm-font-family-monospace: ui-monospace, 'JetBrains Mono', SFMono-Regular, Menlo, Consolas, monospace;
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.08);
+
+  --portal-surface: #ffffff;
+  --portal-surface-alt: #f6f8fa;
+  --portal-border: #e4e8ee;
+  --portal-muted: #677487;
+  --portal-hero-bg: radial-gradient(closest-side at 50% 0%, rgba(79, 70, 229, 0.22), transparent 70%), #ffffff;
+  --portal-hero-fg: #0d1520;
+}
+
+[data-theme='dark'] {
+  --ifm-color-primary: #8b85f4;
+  --ifm-color-primary-dark: #716af1;
+  --ifm-color-primary-darker: #645cf0;
+  --ifm-color-primary-darkest: #3d33ea;
+  --ifm-color-primary-light: #a5a0f7;
+  --ifm-color-primary-lighter: #b2aef8;
+  --ifm-color-primary-lightest: #d9d7fb;
+  --ifm-background-color: #0a0d12;
+  --ifm-background-surface-color: #10151c;
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.3);
+
+  --portal-surface: #10151c;
+  --portal-surface-alt: #0e131a;
+  --portal-border: #1f2731;
+  --portal-muted: #8a96a6;
+  --portal-hero-bg: radial-gradient(closest-side at 50% 0%, rgba(139, 133, 244, 0.25), transparent 70%), #0a0d12;
+  --portal-hero-fg: #e7ecf2;
+}
+
+/* tables in the reference pages carry a lot of short values — keep them tight and scrollable */
+.markdown table {
+  display: table;
+  width: 100%;
+}
+.markdown table td:first-child {
+  white-space: nowrap;
+}
+.markdown table code {
+  white-space: nowrap;
+}
+
+/* screenshots read as screenshots */
+.markdown img {
+  border: 1px solid var(--portal-border);
+  border-radius: 10px;
+}
+
+.theme-admonition {
+  margin-bottom: 1.4rem;
+}

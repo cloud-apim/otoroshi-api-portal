@@ -1,0 +1,78 @@
+---
+sidebar_position: 2
+title: Install
+description: Download the released jar and start Otoroshi with it.
+---
+
+# Install
+
+## Requirements
+
+| | |
+|---|---|
+| Otoroshi | 18.0.0 or later |
+| Java | **17 or above** |
+
+## Download Otoroshi
+
+[![Otoroshi release](https://img.shields.io/github/release/MAIF/otoroshi.svg)](https://github.com/MAIF/otoroshi/releases/latest)
+
+```bash
+curl -L -o otoroshi.jar \
+  'https://github.com/MAIF/otoroshi/releases/download/v18.0.0/otoroshi.jar'
+```
+
+## Download the portal plugins
+
+[![Otoroshi API Portal release](https://img.shields.io/github/release/cloud-apim/otoroshi-api-portal.svg)](https://github.com/cloud-apim/otoroshi-api-portal/releases/latest)
+
+Grab the latest jar from the
+[releases page](https://github.com/cloud-apim/otoroshi-api-portal/releases/latest). The asset is
+named `otoroshi-api-portal_3-<version>.jar`, and comes with its checksum:
+
+```bash
+curl -L -o otoroshi-api-portal.jar \
+  'https://github.com/cloud-apim/otoroshi-api-portal/releases/download/<version>/otoroshi-api-portal_3-<version>.jar'
+curl -L -o otoroshi-api-portal.jar.sha256 \
+  'https://github.com/cloud-apim/otoroshi-api-portal/releases/download/<version>/otoroshi-api-portal_3-<version>.jar.sha256'
+
+shasum -a 256 otoroshi-api-portal.jar | cut -d ' ' -f 1
+cat otoroshi-api-portal.jar.sha256
+```
+
+## Run Otoroshi with the plugins
+
+```bash
+java -cp "./otoroshi-api-portal.jar:./otoroshi.jar" \
+  -Dotoroshi.adminLogin=admin \
+  -Dotoroshi.adminPassword=password \
+  -Dotoroshi.storage=file \
+  play.core.server.ProdServerStart
+```
+
+The plugins **Otoroshi API Portal** and **Otoroshi API Portal Catalog** then appear in the list of
+plugins of the routes, in the *Cloud APIM* category.
+
+For anything beyond a local trial, see the
+[Otoroshi setup documentation](https://maif.github.io/otoroshi/manual/docs/install/setup-otoroshi).
+
+## Use Docker
+
+Alternatively, mount the jar into the plugins directory Otoroshi already scans:
+
+```bash
+docker run \
+  -p 8080:8080 \
+  -e APP_STORAGE=file \
+  -e OTOROSHI_PLUGINS_DIR_PATH=/usr/app/plugins \
+  -v "$(pwd)/otoroshi-api-portal.jar:/usr/app/plugins/otoroshi-api-portal.jar" \
+  maif/otoroshi:18.0.0
+```
+
+## What the pages load
+
+The pages of the portal are served by the plugin. They load three libraries from jsDelivr, at fixed
+versions — [Scalar](https://github.com/scalar/scalar) on the API reference,
+[marked](https://marked.js.org/) and [highlight.js](https://highlightjs.org/) on the pages written in
+Markdown — and the Plus Jakarta Sans font from Google Fonts. The browsers of your developers need to
+reach them.
