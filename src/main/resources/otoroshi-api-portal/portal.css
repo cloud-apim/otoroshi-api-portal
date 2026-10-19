@@ -1119,10 +1119,20 @@ button.button {
   border-radius: 10px;
   background: var(--code-bg);
 }
-.token code {
+.panel .token input {
   flex: 1;
-  overflow-wrap: anywhere;
+  min-width: 0;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  font-family: ui-monospace, 'JetBrains Mono', SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 13px;
+  text-overflow: ellipsis;
+}
+.panel .token input:focus {
+  outline: none;
 }
 .key-list {
   margin: 0;

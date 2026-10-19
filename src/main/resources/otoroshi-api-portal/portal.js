@@ -244,7 +244,7 @@ ${
     ? `<div class="panel made">
 <h3>${escapeHtml(made.name)}: your key</h3>
 <p class="muted">Keep it secret: <em>Show key</em> shows it again, to you only. Send it in each request, <code>Authorization: Bearer …</code>, or pick it in the API reference.</p>
-<div class="token"><code id="token">${escapeHtml(made.bearer)}</code><button type="button" class="button small" id="copy">Copy</button></div>
+<div class="token"><input type="password" id="token" value="${escapeHtml(made.bearer)}" readonly autocomplete="off" spellcheck="false" aria-label="The key" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"><button type="button" class="button small" id="show-token">Show</button><button type="button" class="button small" id="copy">Copy</button></div>
 <div class="row"><a class="button small primary" href="${escapeHtml(made.api_prefix ?? prefix)}/api-references" id="use">Use it in the reference</a><button type="button" class="button small" id="done">Done</button></div>
 </div>`
     : ''
@@ -296,6 +296,12 @@ ${multi ? `<label>API<select name="api">${keyApis.map((a) => `<option value="${e
           label();
         });
       }
+      // the key hidden until asked
+      mount.querySelector('#show-token')?.addEventListener('click', (e) => {
+        const input = mount.querySelector('#token');
+        input.type = input.type === 'password' ? 'text' : 'password';
+        e.target.textContent = input.type === 'password' ? 'Show' : 'Hide';
+      });
       mount.querySelector('#copy')?.addEventListener('click', (e) => {
         navigator.clipboard?.writeText(made.bearer).then(() => (e.target.textContent = 'Copied'));
       });
