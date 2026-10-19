@@ -1,0 +1,135 @@
+---
+sidebar_position: 3
+title: Full example
+description: A complete documentation for a Wine API portal, with guides fetched from git, a specification and its plans.
+---
+
+# Full example
+
+A complete Wine API: its documentation — a home in Markdown, guides fetched from a git repository,
+a specification, an image, a redirection, a footer and the settings of the portal — and its plans.
+
+```json
+{
+  "documentation": {
+    "enabled": true,
+    "home": {
+      "path": "/home",
+      "content_type": "text/markdown",
+      "site_page": true,
+      "text_content": "# Wines\n\nThe **Wine API** gives you a catalog of wines, grape varieties, wineries and regions.\n\n> New here? Read [Getting started](/docs/getting-started), then take a key in **My keys**."
+    },
+    "logo": {
+      "path": "/logo.png",
+      "content_type": "image/png",
+      "url": "https://raw.githubusercontent.com/my-org/wines-api/main/docs/logo.png"
+    },
+    "references": [
+      {
+        "title": "Wines API",
+        "link": "/openapi.yaml",
+        "description": "The wines, their grapes and their regions."
+      }
+    ],
+    "resources": [
+      {
+        "path": "/openapi.yaml",
+        "content_type": "application/yaml",
+        "url": "https://raw.githubusercontent.com/my-org/wines-api/main/openapi.yaml"
+      },
+      {
+        "path": "/docs/getting-started",
+        "title": "Getting started",
+        "content_type": "text/markdown",
+        "site_page": true,
+        "url": "https://raw.githubusercontent.com/my-org/wines-api/main/docs/getting-started.md"
+      },
+      {
+        "path": "/docs/authentication",
+        "title": "Authentication",
+        "content_type": "text/markdown",
+        "site_page": true,
+        "url": "https://raw.githubusercontent.com/my-org/wines-api/main/docs/authentication.md"
+      },
+      {
+        "path": "/docs/errors",
+        "title": "Errors",
+        "content_type": "text/html",
+        "site_page": true,
+        "text_content": "<h1>Errors</h1><p>The API answers with the usual HTTP status codes.</p><h2>From the gateway</h2><p><code>401</code> without a key, <code>429</code> past a quota.</p>"
+      },
+      {
+        "path": "/docs/terms",
+        "title": "Terms of use",
+        "content_type": "text/markdown",
+        "site_page": true,
+        "text_content": "# Terms of use\n\nOne key per app, kept secret."
+      },
+      {
+        "path": "/docs/architecture.png",
+        "content_type": "image/png",
+        "url": "https://raw.githubusercontent.com/my-org/wines-api/main/docs/architecture.png"
+      }
+    ],
+    "navigation": [
+      {
+        "label": "Guides",
+        "path": "/docs",
+        "items": [
+          {
+            "label": "Introduction",
+            "kind": "category",
+            "links": [
+              { "label": "Getting started", "link": "/docs/getting-started" },
+              { "label": "Authentication", "link": "/docs/authentication" }
+            ]
+          },
+          {
+            "label": "More",
+            "kind": "category",
+            "links": [
+              { "label": "Errors", "link": "/docs/errors" },
+              { "label": "Terms of use", "link": "/docs/terms" }
+            ]
+          }
+        ]
+      }
+    ],
+    "redirections": [{ "from": "/documentation", "to": "/docs/getting-started" }],
+    "footer": { "content_type": "text/plain", "text_content": "Wine API · data from the open wine catalog" },
+    "metadata": {
+      "portal.accent": "#7c2d12",
+      "portal.links": "[{\"label\": \"Status\", \"url\": \"https://status.wines.example.com\"}]",
+      "portal.terms": "/docs/terms",
+      "portal.keys.reason": "manual",
+      "portal.keys.per_user": "3"
+    }
+  },
+  "plans": [
+    {
+      "id": "free",
+      "name": "Free",
+      "description": "To try the API: a key at once.",
+      "status": "published",
+      "access_mode_configuration_type": "apikey",
+      "access_mode_configuration": {},
+      "validation": { "kind": "auto" },
+      "rate_limiting": {
+        "strategy": { "id": "LegacyThrottlingStrategyConfig", "quota": { "window": 10, "daily": 1000, "monthly": 10000 } }
+      }
+    },
+    {
+      "id": "pro",
+      "name": "Pro",
+      "description": "For production: higher quotas, on approval.",
+      "status": "published",
+      "access_mode_configuration_type": "apikey",
+      "access_mode_configuration": {},
+      "validation": { "kind": "manual" },
+      "rate_limiting": {
+        "strategy": { "id": "LegacyThrottlingStrategyConfig", "quota": { "window": 100, "daily": 100000, "monthly": 2000000 } }
+      }
+    }
+  ]
+}
+```

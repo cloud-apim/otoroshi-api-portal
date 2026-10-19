@@ -1,0 +1,8 @@
+{
+  "label": "API keys",
+  "position": 5,
+  "link": {
+    "type": "generated-index",
+    "description": "The plans of the API, how a developer takes a key of one, and everything they do with it."
+  }
+}

@@ -1,0 +1,62 @@
+---
+sidebar_position: 1
+title: Setup
+description: The route of the portal of an API, its plugin chain, and the configuration of the plugin.
+---
+
+# Setup
+
+The portal of an API is a **route** with the **Otoroshi API Portal** plugin, pointing at an Otoroshi
+API with a `documentation` section.
+
+## The route
+
+```json
+{
+  "frontend": { "domains": ["portal.example.com"], "strip_path": true, "exact": false },
+  "backend": { "targets": [{ "hostname": "request.otoroshi.io", "port": 443, "tls": true }] },
+  "plugins": [
+    { "plugin": "cp:otoroshi.next.plugins.OverrideHost", "enabled": true, "config": {} },
+    { "plugin": "cp:otoroshi.next.plugins.NgAuthModuleUserExtractor", "enabled": true, "config": { "module": "<auth-module-id>" } },
+    { "plugin": "cp:otoroshi.next.plugins.AuthModule", "enabled": true, "include": ["/login"], "config": { "module": "<auth-module-id>" } },
+    {
+      "plugin": "cp:otoroshi_plugins.com.cloud.apim.plugins.apiportal.OtoroshiApiPortal",
+      "enabled": true,
+      "config": { "api_ref": "<api-id>" }
+    }
+  ]
+}
+```
+
+| Plugin | Role |
+|---|---|
+| `OverrideHost` | Rewrites the Host header for the backend target (never called: the portal answers every request) |
+| `NgAuthModuleUserExtractor` | Reads the developer signed in, on every request, without asking anyone to sign in |
+| `AuthModule` (include `/login`) | Asks to sign in on `/login` only: the portal stays public, developers sign in to take keys |
+| `OtoroshiApiPortal` | The portal |
+
+After signing in, `/login?redirect=<path>` brings the developer back where they were (a path of the
+same site only).
+
+## The configuration of the plugin
+
+| Field | Type | Description |
+|---|---|---|
+| `api_ref` | `string` | **Required**. The id of the Otoroshi API whose portal it is |
+| `prefix` | `string` | Optional path prefix, when the portal is not at the root of its domain (e.g. `/portal`) |
+
+With a `prefix`, every path of the portal is under it — its pages, its files, its JSON — and so are
+the paths of the documentation: the `/docs/...` links of the pages, the links of the navigation and
+the redirections are served under the prefix.
+
+## What the portal serves
+
+| Path | |
+|---|---|
+| `/` | The home |
+| `/<resource path>` | The pages and files of the documentation |
+| `/api-references` | The API reference (the list of the specifications when there are several) |
+| `/keys` | The keys of the developer (when the API has `apikey` plans) |
+| `/login`, `/logout` | Sign in (through the auth module), sign out |
+
+→ [All the routes of the portal](../reference/routes.mdx)

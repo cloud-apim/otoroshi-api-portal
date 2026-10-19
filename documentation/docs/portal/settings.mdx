@@ -1,0 +1,64 @@
+---
+sidebar_position: 3
+title: Settings
+description: The portal.* metadata of the documentation — title, look, links, reference, keys.
+---
+
+# Settings
+
+The settings of a portal are metadata of its documentation, all optional:
+
+```json
+{
+  "documentation": {
+    "metadata": {
+      "portal.title": "Wines",
+      "portal.accent": "#7c2d12",
+      "portal.links": "[{\"label\": \"Status\", \"url\": \"https://status.example.com\"}]",
+      "portal.terms": "/docs/terms",
+      "portal.keys.reason": "manual"
+    }
+  }
+}
+```
+
+## The look
+
+| Key | Default | Description |
+|---|---|---|
+| `portal.title` | the name of the API | The name of the portal, in the top bar and the hero of the home |
+| `portal.description` | the description of the API | The pitch of the home |
+| `portal.theme` | `system` | `system`, `light` or `dark` |
+| `portal.toggle` | `true` | `false` hides the light / dark button (and locks a `light` or `dark` theme) |
+| `portal.accent` | `#0061bd` | The accent color, like `#4f46e5` |
+| `portal.links` | none | Links of the top bar: a JSON array, as a string, of `{ "label", "url" }` |
+
+The `logo`, `footer` and `banner` resources of the [documentation](./documentation.mdx) complete it.
+
+## The API reference
+
+| Key | Default | Description |
+|---|---|---|
+| `portal.reference.theme` | `default` | The theme of Scalar: `default`, `alternate`, `moon`, `purple`, `solarized`, `bluePlanet`, `deepSpace`, `saturn`, `kepler`, `mars`, `laserwave`, `elysiajs`, `fastify`, `none` |
+| `portal.reference.layout` | `modern` | `modern` or `classic` |
+| `portal.reference.client` | `true` | `false` hides the client (the *Test Request* buttons) |
+| `portal.reference.models` | `true` | `false` hides the models |
+| `portal.reference.gateway_server` | `true` | `false` keeps only the servers of the specifications (see [API reference](./reference.mdx)) |
+
+## The keys
+
+| Key | Default | Description |
+|---|---|---|
+| `portal.keys.per_user` | unlimited | How many keys a developer can take |
+| `portal.keys.reason` | `optional` | Asking why a developer takes a key: `optional`, `required`, `manual` (required for the plans validated by hand) or `none` |
+| `portal.terms` | none | The terms of use: an address, or a path of the documentation like `/docs/terms`. A developer accepts them before taking a key |
+| `portal.sample_path` | the first GET of the specification | The request of the code samples of a key, like `/pets?status=available` |
+
+## In a catalog
+
+| Key | Description |
+|---|---|
+| `portal.slug` | The slug of the API in a [catalog](../catalog.mdx): its portal is under `/apis/<slug>` (the name of the API by default) |
+
+The look of a catalog (theme, accent, links, logo) applies to the portals of its APIs; the other
+settings of each API still apply to its own pages.

@@ -1,0 +1,54 @@
+---
+sidebar_position: 3
+title: Managing keys
+description: Everything a developer does with their keys — show, use, watch, rotate, edit, revoke.
+---
+
+# Managing keys
+
+**My keys** lists the keys of the developer, each with its plan, its date, and what it can do.
+
+## Show a key
+
+*Show key* shows the key again, to the developer only, in a masked field: *Show* reveals it, *Hide*
+masks it again, *Copy* copies it. The keys are never in the list itself: the portal gives a key only
+when asked for that one.
+
+## A first request
+
+Below the key, a first request to send with it, in **curl**, **JavaScript** and **Python**, to the
+gateway of the API, the key read from a variable named after the API (`PETSTORE_KEY`):
+
+```bash
+curl "https://api.example.com/v3/pet/findByStatus?status=available" \
+  -H "Authorization: Bearer $PETSTORE_KEY"
+```
+
+The request is `portal.sample_path`, or the first `GET` of the first specification without a path
+parameter, its required query parameters given their example (or default) value.
+
+## Use it in the reference
+
+*Use it in the reference* opens the [API reference](../portal/reference.mdx) with the key in its
+authentication: *Test Request* sends the requests with it, through the gateway.
+
+## Usage
+
+Each key shows its calls **today** and **this month** against the quotas of its plan — the counters
+Otoroshi keeps for the key. A gauge turns red past 90%.
+
+## Rotate
+
+*Rotate* gives the key a new secret. The new key is shown at once; the previous one is refused within
+a few seconds, everywhere. The client id of the key stays the same, and so does the key picked in the
+reference, updated with the new secret.
+
+## Edit
+
+*Edit* renames the key, changes its description, and enables or disables it: a disabled key is
+refused by the gateway until enabled again.
+
+## Revoke
+
+*Revoke* deletes the key: its subscription and its API key. *Cancel*, on a key waiting an approval,
+withdraws the request.

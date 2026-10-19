@@ -1,0 +1,90 @@
+---
+sidebar_position: 6
+title: Catalog of APIs
+description: One portal for several APIs, picked by id, tags or metadata, with the portal of each API inside.
+---
+
+# Catalog of APIs
+
+The **Otoroshi API Portal Catalog** plugin serves one portal for several APIs:
+
+- a home with the APIs — their name, version, description, plans, tags — and a search by text or tag
+- **My keys** for all of them: the developer picks an API, then one of its plans, and sees all their
+  keys in one place
+- the portal of each API under `/apis/<slug>`: the very same pages as the [portal of a single
+  API](./portal/setup.mdx), with the top bar of the catalog and the API in a breadcrumb
+
+A developer signs in once, at the catalog.
+
+![A catalog](/img/screenshots/catalog.png)
+
+![An API in a catalog](/img/screenshots/catalog-api.png)
+
+## The route
+
+The same chain as the portal of a single API, with the catalog plugin instead:
+
+```json
+{
+  "frontend": { "domains": ["developers.example.com"], "strip_path": true, "exact": false },
+  "backend": { "targets": [{ "hostname": "request.otoroshi.io", "port": 443, "tls": true }] },
+  "plugins": [
+    { "plugin": "cp:otoroshi.next.plugins.OverrideHost", "enabled": true, "config": {} },
+    { "plugin": "cp:otoroshi.next.plugins.NgAuthModuleUserExtractor", "enabled": true, "config": { "module": "<auth-module-id>" } },
+    { "plugin": "cp:otoroshi.next.plugins.AuthModule", "enabled": true, "include": ["/login"], "config": { "module": "<auth-module-id>" } },
+    {
+      "plugin": "cp:otoroshi_plugins.com.cloud.apim.plugins.apiportal.OtoroshiApiPortalCatalog",
+      "enabled": true,
+      "config": {
+        "title": "Acme developers",
+        "description": "Every public API of Acme, and your keys for all of them.",
+        "tags": ["public"],
+        "accent": "#0d9488",
+        "links": [{ "label": "Status", "url": "https://status.example.com" }],
+        "footer": "Acme · the public APIs"
+      }
+    }
+  ]
+}
+```
+
+## Its configuration
+
+| Field | Type | Description |
+|---|---|---|
+| `prefix` | `string` | Optional path prefix if the catalog is not served at the root of the domain |
+| `api_refs` | `string[]` | The ids of the APIs of the catalog |
+| `tags` | `string[]` | The APIs with all these tags |
+| `metadata` | `object` | The APIs with all these metadata |
+| `title` | `string` | The name of the catalog (`Developer portal` by default) |
+| `description` | `string` | The pitch of its home |
+| `logo` | `string` | The address of its logo |
+| `theme` | `string` | `system` (default), `light` or `dark` |
+| `toggle` | `boolean` | `false` hides the light / dark button |
+| `accent` | `string` | The accent color, like `#0d9488` |
+| `links` | `object[]` | Links of the top bar: `[{ "label": "...", "url": "https://..." }]` |
+| `footer` | `string` | The text of the footer |
+
+## Its APIs
+
+An API is in the catalog when:
+
+- it is listed in `api_refs`, **or** it has all the `tags` and `metadata` given — every API when
+  none of the three is given
+- it is published (or deprecated): its routes are live
+- it has an enabled `documentation`
+- it is not `private`, unless listed by id
+
+The tags used to select the APIs are not shown on their cards (they all have them). Each API gets a
+slug: the `portal.slug` metadata of its documentation (or of the API), or its name. Its portal is
+under `/apis/<slug>`, and `/keys?api=<slug>` opens **My keys** with that API chosen.
+
+## Look and settings
+
+The look of the catalog — theme, accent, links, logo — applies to the portals of its APIs, so they
+read as one site. The other settings of each API (`portal.title`, `portal.description`,
+`portal.reference.*`, `portal.keys.*`, `portal.terms`, its footer and banner) still apply to its own
+pages.
+
+The paths of the documentation of an API are served under `/apis/<slug>`: a `/docs/errors` link in a
+page of the Petstore API goes to `/apis/petstore/docs/errors`.

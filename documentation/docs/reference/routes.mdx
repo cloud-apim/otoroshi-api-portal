@@ -1,0 +1,53 @@
+---
+sidebar_position: 1
+title: Routes
+description: Every path the portal and the catalog serve, pages and JSON.
+---
+
+# Routes
+
+## The portal of an API
+
+Under the `prefix` of the plugin, or under `/apis/<slug>` in a catalog.
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/` | The home |
+| `GET` | `/<resource path>` | A page or a file of the documentation |
+| `GET` | `/<navigation path>` | The first page of a tab of the navigation |
+| `GET` | `/api-references` | The API reference (the list of the specifications when there are several) |
+| `GET` | `/api-references/<link>` | The API reference of one specification |
+| `GET` | `/keys` | The keys of the developer (`/subscriptions` redirects there) |
+| `GET` | `/login?redirect=<path>` | Sign in through the auth module, then back to `<path>` |
+| `GET` | `/logout` | Sign out (the Otoroshi logout) |
+| `GET` | `/_portal/<file>` | The files of the portal: `portal.css`, `portal.js`, `theme.js` |
+| `GET` | `/api/session` | The developer signed in, the plans they take keys of, the terms, the reason asked, the gateway and a sample request |
+| `GET` | `/api/plans` | The plans shown on the portal |
+| `GET` | `/api/documentation` | The documentation (without the headers its resources are fetched with) |
+| `GET` | `/api/openapi?link=<link>` | A specification, as the reference reads it (gateway server, security scheme) |
+| `GET` | `/api/apikeys` | The keys of the developer, with their usage (never their secrets) |
+| `POST` | `/api/apikeys` | Take a key: `{ "name", "description", "plan", "reason", "accept_terms" }` |
+| `POST` | `/api/apikeys/<id>/reveal` | The bearer token of a key |
+| `POST` | `/api/apikeys/<id>/rotate` | A new secret for a key: its new bearer token |
+| `PUT` | `/api/apikeys/<id>` | Update a key: `{ "name", "description", "enabled" }` |
+| `DELETE` | `/api/apikeys/<id>` | Revoke a key |
+| any | `/api/_proxy?scalar_url=<url>` | The requests of the reference, to the hosts of the API only |
+
+`<id>` is the id of the subscription of the key (or the client id of its API key). The writes
+(`POST`, `PUT`, `DELETE` on `/api/apikeys`) need a signed in developer and the
+`X-Otoroshi-Api-Portal: 1` header.
+
+## The catalog
+
+Under the `prefix` of the plugin.
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/` | The home: the APIs, a search |
+| `GET` | `/keys` | The keys of the developer for all the APIs (`?api=<slug>` to choose one) |
+| `GET` | `/login`, `/logout` | Sign in, sign out, for all the APIs |
+| `GET` | `/_portal/<file>` | The files of the portal |
+| `GET` | `/api/session` | The developer signed in, and for each API with keys: its plans, terms, reason, gateway, sample request |
+| `GET` | `/api/apis` | The APIs of the catalog |
+| `GET` | `/api/apikeys` | The keys of the developer for all the APIs, with their usage |
+| any | `/apis/<slug>/...` | The portal of an API, all the routes above |

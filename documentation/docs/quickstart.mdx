@@ -1,0 +1,106 @@
+---
+sidebar_position: 3
+title: Quickstart
+description: From an Otoroshi API to its developer portal, with a guide, a reference and keys.
+---
+
+# Quickstart
+
+About ten minutes, assuming the plugins are [installed](./install.mdx) and you have an Otoroshi API
+published on the gateway. We will give it a documentation and a plan, then serve its portal on
+`portal.oto.tools`.
+
+## 1. An auth module for the developers
+
+The portal is public; developers sign in to take keys. Any Otoroshi auth module works (OIDC, LDAP,
+in-memory…). To try, create an in-memory one with a user:
+**Security → Authentication configs → Add item**, type *In memory*, then add a user. Note its id.
+
+:::tip
+Behind plain `http`, uncheck *secure* in the session cookie settings of the module, or the browser
+drops its cookie.
+:::
+
+## 2. A documentation and a plan for the API
+
+Edit your API (`apis.otoroshi.io/Api`) and add a `documentation` section: a home, a specification,
+a guide. Then a plan developers take keys of.
+
+```json
+{
+  "documentation": {
+    "enabled": true,
+    "home": {
+      "path": "/home",
+      "content_type": "text/markdown",
+      "site_page": true,
+      "text_content": "# Wines\n\nThe catalog of the wines of the world. Start with [Getting started](/docs/getting-started)."
+    },
+    "references": [{ "title": "Wines API", "link": "/openapi.json" }],
+    "resources": [
+      { "path": "/openapi.json", "content_type": "application/json", "url": "https://wines.example.com/openapi.json" },
+      {
+        "path": "/docs/getting-started",
+        "title": "Getting started",
+        "content_type": "text/markdown",
+        "site_page": true,
+        "text_content": "# Getting started\n\nTake a key in **My keys**, then call the API with it."
+      }
+    ],
+    "navigation": [
+      {
+        "label": "Guides",
+        "path": "/docs",
+        "items": [{ "label": "Getting started", "link": "/docs/getting-started" }]
+      }
+    ],
+    "metadata": { "portal.accent": "#4f46e5" }
+  },
+  "plans": [
+    {
+      "id": "free",
+      "name": "Free",
+      "description": "To try the API: a key at once.",
+      "status": "published",
+      "access_mode_configuration_type": "apikey",
+      "access_mode_configuration": {},
+      "validation": { "kind": "auto" },
+      "rate_limiting": {
+        "strategy": { "id": "LegacyThrottlingStrategyConfig", "quota": { "window": 10, "daily": 1000, "monthly": 10000 } }
+      }
+    }
+  ]
+}
+```
+
+## 3. A route for the portal
+
+Create a route on the domain of the portal, with this plugin chain:
+
+```json
+{
+  "frontend": { "domains": ["portal.oto.tools"], "strip_path": true, "exact": false },
+  "backend": { "targets": [{ "hostname": "request.otoroshi.io", "port": 443, "tls": true }] },
+  "plugins": [
+    { "plugin": "cp:otoroshi.next.plugins.OverrideHost", "enabled": true, "config": {} },
+    { "plugin": "cp:otoroshi.next.plugins.NgAuthModuleUserExtractor", "enabled": true, "config": { "module": "<auth-module-id>" } },
+    { "plugin": "cp:otoroshi.next.plugins.AuthModule", "enabled": true, "include": ["/login"], "config": { "module": "<auth-module-id>" } },
+    {
+      "plugin": "cp:otoroshi_plugins.com.cloud.apim.plugins.apiportal.OtoroshiApiPortal",
+      "enabled": true,
+      "config": { "api_ref": "<api-id>" }
+    }
+  ]
+}
+```
+
+The backend is never called: the portal plugin answers every request.
+
+## 4. Open it
+
+Go to [http://portal.oto.tools:8080](http://portal.oto.tools:8080): the home, the guide, the API
+reference. Sign in, open **My keys**, take a key of the *Free* plan, then **Use it in the
+reference**: the key is put in the authentication of the reference, and *Test Request* sends the
+request through the gateway with it.
+
+→ [The documentation format](./portal/documentation.mdx) · [The settings of a portal](./portal/settings.mdx) · [API keys](./keys/plans.mdx)

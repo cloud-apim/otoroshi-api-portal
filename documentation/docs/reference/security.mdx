@@ -1,0 +1,45 @@
+---
+sidebar_position: 2
+title: Security
+description: What the portal keeps safe — the keys, the writes, the requests of the reference, the documentation.
+---
+
+# Security
+
+## The keys of the developers
+
+- a developer only ever sees and changes **their own** keys: every key is checked against the
+  owner of its subscription (the email of the developer) and the API of the portal
+- the list of the keys never holds their secrets: a key is given only when asked for that one
+  (*Show key*), and right after it is taken or rotated
+- only the published, non private `apikey` plans of the API are offered; a key of any other plan is
+  refused
+- a `manual` plan gives a disabled key, enabled only when its subscription is confirmed in Otoroshi
+
+## The writes
+
+Taking, revealing, rotating, editing and revoking a key need a signed in developer, and the
+`X-Otoroshi-Api-Portal: 1` header: the pages of the portal send it, a form of another site cannot.
+
+## The requests of the reference
+
+The requests sent from the API reference go through `/api/_proxy`:
+
+- only to **the hosts of the API** — the domain of the API, the servers of its specifications —
+  anything else is refused (`403`)
+- **never** with the cookies of the portal, nor what the browser adds on its own (`Origin`,
+  `Referer`, `X-Forwarded-*`, `Sec-*`…)
+- their responses come back without what would apply to the portal itself (`Set-Cookie`,
+  `Strict-Transport-Security`, `Alt-Svc`)
+
+## The documentation
+
+- `/api/documentation` never shows the `source` of the documentation nor the `http_headers` its
+  resources are fetched with (a token for a private repository stays on the gateway)
+- `/api/plans` shows a public view of the plans, not their configuration
+
+## The pages
+
+The pages load Scalar, marked and highlight.js from jsDelivr, at fixed versions, and the Plus Jakarta
+Sans font from Google Fonts. The HTML of the documentation (HTML pages, Markdown with HTML, the
+footer and the banner) is shown as written: it is yours, not the developers'.
