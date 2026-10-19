@@ -1,6 +1,7 @@
-// The developer portal of an Otoroshi API, in the browser: its pages rendered from their markdown (marked and
-// highlight.js, loaded by the pages that need them), their table of contents, the copy of the code, the light and dark
-// themes, the keys of the developer and the API reference (Scalar), its requests sent through the portal.
+// The developer portal of an Otoroshi API (or a catalog of them), in the browser: its pages rendered from their markdown
+// (marked and highlight.js, loaded by the pages that need them), their table of contents, the copy of the code, the
+// light and dark themes, the keys of the developer, the API reference (Scalar) with its requests sent through the
+// portal, the search of the catalog.
 
 (() => {
   const root = document.documentElement;
@@ -12,9 +13,9 @@
   const loginUrl = (session) => `${session.login_url}?redirect=${encodeURIComponent(location.pathname)}`;
   let reference = null;
 
-  // the key put in the reference (its token, its id), for this tab only
-  const TOKEN_KEY = 'otoroshi-api-portal-token';
-  const KEY_ID = 'otoroshi-api-portal-key-id';
+  // the key put in the reference of an API (its token, its id), for this tab only
+  const tokenKey = (at) => `otoroshi-api-portal-token${at}`;
+  const keyIdKey = (at) => `otoroshi-api-portal-key-id${at}`;
   const remembered = (name) => {
     try {
       return sessionStorage.getItem(name);
@@ -31,9 +32,10 @@
     }
   };
 
-  // what the pages ask the portal (api/…): the writes carry X-Otoroshi-Api-Portal, never sent by a foreign form
-  async function call(method, path, body) {
-    const res = await fetch(prefix + path, {
+  // what the pages ask the portal (`at` its place, then api/…): the writes carry X-Otoroshi-Api-Portal, never sent by a
+  // foreign form
+  async function callAt(at, method, path, body) {
+    const res = await fetch(at + path, {
       method,
       credentials: 'same-origin',
       headers: { Accept: 'application/json', ...(method === 'GET' ? {} : { 'X-Otoroshi-Api-Portal': '1' }), ...(body ? { 'Content-Type': 'application/json' } : {}) },
@@ -43,6 +45,7 @@
     if (!res.ok) throw Object.assign(new Error(json?.error_description || json?.error || `the portal answered ${res.status}`), { status: res.status });
     return json;
   }
+  const call = (method, path, body) => callAt(prefix, method, path, body);
 
   /* ---------- the markdown ---------- */
 
@@ -101,6 +104,14 @@
   if (content) {
     if (typeof data.markdown === 'string') {
       (content.querySelector('.portal-md') || content).innerHTML = renderMarkdown(data.markdown);
+    }
+    // the paths of the documentation (/docs/…): under the portal, when it is not at the root of its domain
+    if (prefix) {
+      content.querySelectorAll('a[href], img[src]').forEach((el) => {
+        const attribute = el.tagName === 'IMG' ? 'src' : 'href';
+        const value = el.getAttribute(attribute) || '';
+        if (value.startsWith('/') && !value.startsWith('//') && value !== prefix && !value.startsWith(`${prefix}/`)) el.setAttribute(attribute, prefix + value);
+      });
     }
     // the pages written in HTML: their code highlighted, their headings given an id
     if (window.hljs) content.querySelectorAll('pre > code:not(.hljs)').forEach((el) => window.hljs.highlightElement(el));
@@ -194,23 +205,29 @@
         mount.innerHTML = '<p class="muted">Loading…</p>';
         return;
       }
-      const plans = session.plans || [];
-      const planOf = (k) => plans.find((p) => p.id === k.plan);
+      // the APIs the keys are taken of: the one of the portal, or the ones of the catalog
+      const multi = Array.isArray(session.apis);
+      const apis = multi ? session.apis : [{ prefix, name: null, plans: session.plans || [], per_user: session.per_user }];
+      const offered = apis.flatMap((api) => api.plans.map((plan) => ({ api, plan })));
+      const apiOf = (k) => (multi ? apis.find((a) => a.prefix === k.api_prefix) : apis[0]);
+      const planOf = (k) => apiOf(k)?.plans.find((p) => p.id === k.plan);
+      const planName = (o) => `${multi ? `${o.api.name} · ` : ''}${o.plan.name}`;
+      const perUser = multi ? null : apis[0].per_user;
       if (!session.user) {
         mount.innerHTML = `<div class="panel signin">
 <h2>Sign in to take your keys</h2>
 <p class="muted">Your keys are yours: nobody else sees them here.</p>
-${plans.length ? `<div class="chips">${plans.map((p) => `<span class="badge accent">${escapeHtml(p.name)}${p.validation === 'auto' ? '' : ' · on approval'}</span>`).join('')}</div>` : ''}
+${offered.length ? `<div class="chips">${offered.map((o) => `<span class="badge accent">${escapeHtml(planName(o))}${o.plan.validation === 'auto' ? '' : ' · on approval'}</span>`).join('')}</div>` : ''}
 <div><a class="button primary" href="${escapeHtml(loginUrl(session))}">Sign in</a></div>
 </div>`;
         return;
       }
-      const full = session.per_user && keys.length >= session.per_user;
+      const full = perUser && keys.length >= perUser;
       const keyRow = (k) => {
         const waiting = k.status !== 'validated';
         const actions = `${waiting ? '' : `<button type="button" class="button small" data-reveal="${escapeHtml(k.id)}">Show key</button>`}<button type="button" class="button small" data-edit="${escapeHtml(k.id)}">Edit</button><button type="button" class="button small danger" data-revoke="${escapeHtml(k.id)}">${waiting ? 'Cancel' : 'Revoke'}</button>`;
         const since = k.created_at ? ` · since ${escapeHtml(new Date(k.created_at).toLocaleDateString())}` : '';
-        return `<li><div><strong>${escapeHtml(k.name)}</strong>${waiting ? ' <span class="badge warning">Waiting approval</span>' : k.enabled ? '' : ' <span class="badge">Off</span>'}<div class="muted small">${escapeHtml(planOf(k)?.name || k.plan_name || k.plan)}${since}</div>${k.description ? `<div class="muted small">${escapeHtml(k.description)}</div>` : ''}</div><div class="row">${actions}</div></li>`;
+        return `<li><div><strong>${escapeHtml(k.name)}</strong>${waiting ? ' <span class="badge warning">Waiting approval</span>' : k.enabled ? '' : ' <span class="badge">Off</span>'}<div class="muted small">${multi ? `${escapeHtml(k.api_name)} · ` : ''}${escapeHtml(planOf(k)?.name || k.plan_name || k.plan)}${since}</div>${k.description ? `<div class="muted small">${escapeHtml(k.description)}</div>` : ''}</div><div class="row">${actions}</div></li>`;
       };
       const editingKey = keys.find((k) => k.id === editing);
       mount.innerHTML = `<div class="who"><span class="muted">Signed in as</span> <strong>${escapeHtml(session.user.email)}</strong> <a href="${escapeHtml(session.logout_url)}">Sign out</a></div>
@@ -222,7 +239,7 @@ ${
 <h3>${escapeHtml(made.name)}: your key</h3>
 <p class="muted">Keep it secret: <em>Show key</em> shows it again, to you only. Send it in each request, <code>Authorization: Bearer …</code>, or pick it in the API reference.</p>
 <div class="token"><code id="token">${escapeHtml(made.bearer)}</code><button type="button" class="button small" id="copy">Copy</button></div>
-<div class="row"><a class="button small primary" href="${escapeHtml(prefix)}/api-references" id="use">Use it in the reference</a><button type="button" class="button small" id="done">Done</button></div>
+<div class="row"><a class="button small primary" href="${escapeHtml(made.api_prefix ?? prefix)}/api-references" id="use">Use it in the reference</a><button type="button" class="button small" id="done">Done</button></div>
 </div>`
     : ''
 }
@@ -238,19 +255,19 @@ ${editingKey.status === 'validated' ? `<label class="check"><input type="checkbo
     : ''
 }
 <div class="panel">
-<h3>Your keys <span class="muted small">${keys.length}${session.per_user ? ` of ${session.per_user}` : ''}</span></h3>
+<h3>Your keys <span class="muted small">${keys.length}${perUser ? ` of ${perUser}` : ''}</span></h3>
 ${keys.length ? `<ul class="key-list">${keys.map(keyRow).join('')}</ul>` : '<p class="muted">No key yet.</p>'}
 </div>
 ${
-  plans.length === 0
+  offered.length === 0
     ? '<div class="panel"><p class="muted">No plan offers keys on this portal for now.</p></div>'
     : full
-      ? `<div class="panel"><p class="muted">${session.per_user} key${session.per_user > 1 ? 's' : ''} at most: revoke one to take another.</p></div>`
+      ? `<div class="panel"><p class="muted">${perUser} key${perUser > 1 ? 's' : ''} at most: revoke one to take another.</p></div>`
       : `<form class="panel" id="new-key">
 <h3>A new key</h3>
 <label>Name<input name="name" required maxlength="80" placeholder="My app" autocomplete="off"></label>
 <label>Description<input name="description" maxlength="500" placeholder="What it is for (optional)" autocomplete="off"></label>
-<label>Plan<select name="plan">${plans.map((p) => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)} — ${escapeHtml(quotaOf(p.quotas))}${p.validation === 'auto' ? '' : ' (on approval)'}</option>`).join('')}</select></label>
+<label>${multi ? 'API and plan' : 'Plan'}<select name="plan">${offered.map((o, i) => `<option value="${i}">${escapeHtml(planName(o))} — ${escapeHtml(quotaOf(o.plan.quotas))}${o.plan.validation === 'auto' ? '' : ' (on approval)'}</option>`).join('')}</select></label>
 <p class="hint" id="plan-help"></p>
 <div><button type="submit" class="button primary" id="take"${busy ? ' disabled' : ''}></button></div>
 </form>`
@@ -258,7 +275,7 @@ ${
       // the button says what happens: a key at once, or a request to approve
       const form = mount.querySelector('#new-key');
       const label = () => {
-        const p = plans.find((x) => x.id === form.plan.value);
+        const p = offered[Number(form.plan.value)]?.plan;
         mount.querySelector('#take').textContent = busy ? 'One moment…' : p && p.validation !== 'auto' ? 'Request a key' : 'Take a key';
         mount.querySelector('#plan-help').textContent = p?.description || '';
       };
@@ -270,20 +287,24 @@ ${
         navigator.clipboard?.writeText(made.bearer).then(() => (e.target.textContent = 'Copied'));
       });
       mount.querySelector('#use')?.addEventListener('click', () => {
-        remember(TOKEN_KEY, made.bearer);
-        remember(KEY_ID, made.id);
+        remember(tokenKey(made.api_prefix ?? prefix), made.bearer);
+        remember(keyIdKey(made.api_prefix ?? prefix), made.id);
       });
       mount.querySelector('#done')?.addEventListener('click', () => update({ made: null }));
       mount.querySelector('#cancel-edit')?.addEventListener('click', () => update({ editing: null }));
       mount.querySelectorAll('[data-edit]').forEach((b) => b.addEventListener('click', () => update({ editing: b.dataset.edit, made: null, notice: null, error: null })));
+      // a key of the developer, and the portal of its API
+      const keyOf = (id) => keys.find((k) => k.id === id);
+      const at = (k) => k?.api_prefix ?? prefix;
       mount.querySelectorAll('[data-revoke]').forEach((b) =>
         b.addEventListener('click', async () => {
           if (!confirm('Remove this key? The requests sent with it are refused from now on.')) return;
+          const k = keyOf(b.dataset.revoke);
           try {
-            await call('DELETE', `/api/apikeys/${encodeURIComponent(b.dataset.revoke)}`);
-            if (remembered(KEY_ID) === b.dataset.revoke) {
-              remember(KEY_ID, null);
-              remember(TOKEN_KEY, null);
+            await callAt(at(k), 'DELETE', `/api/apikeys/${encodeURIComponent(b.dataset.revoke)}`);
+            if (remembered(keyIdKey(at(k))) === b.dataset.revoke) {
+              remember(keyIdKey(at(k)), null);
+              remember(tokenKey(at(k)), null);
             }
             update({ keys: state.keys.filter((k) => k.id !== b.dataset.revoke), made: null, editing: null, notice: null, error: null });
           } catch (err) {
@@ -294,7 +315,8 @@ ${
       mount.querySelectorAll('[data-reveal]').forEach((b) =>
         b.addEventListener('click', async () => {
           try {
-            update({ made: await call('POST', `/api/apikeys/${encodeURIComponent(b.dataset.reveal)}/reveal`), editing: null, notice: null, error: null });
+            const k = keyOf(b.dataset.reveal);
+            update({ made: { ...k, ...(await callAt(at(k), 'POST', `/api/apikeys/${encodeURIComponent(b.dataset.reveal)}/reveal`)) }, editing: null, notice: null, error: null });
           } catch (err) {
             update({ error: err.message });
           }
@@ -305,12 +327,12 @@ ${
         const values = new FormData(e.target);
         update({ busy: true, error: null });
         try {
-          const key = await call('PUT', `/api/apikeys/${encodeURIComponent(editing)}`, {
+          const key = await callAt(at(editingKey), 'PUT', `/api/apikeys/${encodeURIComponent(editing)}`, {
             name: String(values.get('name') || '').trim(),
             description: String(values.get('description') || '').trim(),
             ...(editingKey.status === 'validated' ? { enabled: values.get('enabled') === 'on' } : {}),
           });
-          update({ busy: false, editing: null, keys: state.keys.map((k) => (k.id === key.id ? key : k)) });
+          update({ busy: false, editing: null, keys: state.keys.map((k) => (k.id === key.id ? { ...k, ...key } : k)) });
         } catch (err) {
           update({ busy: false, error: err.message });
         }
@@ -318,13 +340,15 @@ ${
       form?.addEventListener('submit', async (e) => {
         e.preventDefault();
         const values = new FormData(e.target);
+        const { api, plan } = offered[Number(values.get('plan'))];
         update({ busy: true, error: null, notice: null });
         try {
-          const key = await call('POST', '/api/apikeys', {
+          const created = await callAt(api.prefix, 'POST', '/api/apikeys', {
             name: String(values.get('name') || '').trim(),
             description: String(values.get('description') || '').trim(),
-            plan: values.get('plan'),
+            plan: plan.id,
           });
+          const key = multi ? { ...created, api: api.slug, api_name: api.name, api_prefix: api.prefix } : created;
           const keys = [...state.keys, key];
           if (key.status === 'validated') update({ busy: false, made: key, keys });
           else update({ busy: false, keys, notice: `Your request for a key of ${key.plan_name || key.plan} is sent: it can be used once approved.` });
@@ -370,7 +394,7 @@ ${
     script.onload = () => {
       spec
         .then((content) => {
-          const token = data.securityScheme ? remembered(TOKEN_KEY) : null;
+          const token = data.securityScheme ? remembered(tokenKey(prefix)) : null;
           const { url, ...scalar } = data.scalar;
           const configuration = {
             ...scalar,
@@ -397,27 +421,27 @@ ${
   const picker = document.getElementById('key-picker');
   if (picker && data.securityScheme) {
     const use = (id, token) => {
-      remember(KEY_ID, id);
-      remember(TOKEN_KEY, token);
+      remember(keyIdKey(prefix), id);
+      remember(tokenKey(prefix), token);
       if (reference) reference.updateConfiguration({ ...reference.getConfiguration(), authentication: authenticationOf(token) });
     };
     call('GET', '/api/session')
       .then(async (session) => {
         if (!session.user) {
           // (signed out since: the key of the tab forgotten)
-          if (remembered(KEY_ID) || remembered(TOKEN_KEY)) use(null, null);
+          if (remembered(keyIdKey(prefix)) || remembered(tokenKey(prefix))) use(null, null);
           picker.innerHTML = `<a class="key-picker-link" href="${escapeHtml(loginUrl(session))}">Sign in to use your keys</a>`;
           return;
         }
         const keys = (await call('GET', '/api/apikeys')).filter((k) => k.status === 'validated');
-        const chosen = keys.some((k) => k.id === remembered(KEY_ID)) ? remembered(KEY_ID) : '';
+        const chosen = keys.some((k) => k.id === remembered(keyIdKey(prefix))) ? remembered(keyIdKey(prefix)) : '';
         picker.innerHTML = `<label><span>Tester key</span><select id="key-select" title="The key of the requests you try in the reference">
 <option value="">None</option>
 ${keys.map((k) => `<option value="${escapeHtml(k.id)}"${k.id === chosen ? ' selected' : ''}${k.enabled ? '' : ' disabled'}>${escapeHtml(k.name)} · ${escapeHtml(k.plan_name || k.plan)}${k.enabled ? '' : ' (off)'}</option>`).join('')}
 ${keys.length ? '' : '<option value="" disabled>No key yet: take one in My keys</option>'}
 </select></label>`;
         // (a key revoked since: forgotten)
-        if (!chosen && remembered(KEY_ID)) use(null, null);
+        if (!chosen && remembered(keyIdKey(prefix))) use(null, null);
         picker.querySelector('#key-select').addEventListener('change', async (e) => {
           const id = e.target.value;
           if (!id) return use(null, null);
@@ -430,5 +454,34 @@ ${keys.length ? '' : '<option value="" disabled>No key yet: take one in My keys<
         });
       })
       .catch(() => picker.remove());
+  }
+
+  /* ---------- the catalog ---------- */
+
+  // its APIs found by a text, or a tag
+  const search = document.getElementById('api-search');
+  if (search) {
+    const cards = [...document.querySelectorAll('[data-api]')];
+    const chips = [...document.querySelectorAll('[data-tag]')];
+    const none = document.getElementById('api-none');
+    let tag = null;
+    const filter = () => {
+      const text = search.value.trim().toLowerCase();
+      let shown = 0;
+      cards.forEach((card) => {
+        const visible = (!text || card.dataset.search.includes(text)) && (!tag || card.dataset.tags.split(',').includes(tag));
+        card.hidden = !visible;
+        if (visible) shown++;
+      });
+      if (none) none.hidden = shown > 0;
+    };
+    search.addEventListener('input', filter);
+    chips.forEach((chip) =>
+      chip.addEventListener('click', () => {
+        tag = tag === chip.dataset.tag ? null : chip.dataset.tag;
+        chips.forEach((c) => c.classList.toggle('accent', c.dataset.tag === tag));
+        filter();
+      })
+    );
   }
 })();

@@ -24,6 +24,7 @@ If you expose APIs through Otoroshi and need a developer-facing portal, you typi
 - Remote content loading (documentation pages and resources fetched from URLs)
 - Remote portal configuration (load the entire `documentation` section from a URL)
 - Redirections, banner, footer, links in the top bar
+- A catalog of APIs (a second plugin): a home listing several APIs (by id, tags or metadata) with a search, the keys of the developer for all of them, and the portal of each API under `/apis/<slug>`
 - Light / Dark / System theme, an accent color
 - Authentication integration via Otoroshi auth modules
 - Otoroshi cluster support (leader/worker mode)
@@ -46,11 +47,19 @@ If you expose APIs through Otoroshi and need a developer-facing portal, you typi
 
 ![subscriptions](./screenshots/subscriptions.png)
 
+### Catalog of APIs
+
+![catalog](./screenshots/catalog.png)
+
+### An API in the catalog
+
+![catalog-api](./screenshots/catalog-api.png)
+
 ## Installation
 
 1. Download the latest JAR from the [releases page](https://github.com/cloud-apim/otoroshi-api-portal/releases)
 2. Add the JAR to your Otoroshi plugins directory (see [Otoroshi documentation](https://maif.github.io/otoroshi/manual/plugins/index.html) on loading external plugins)
-3. Restart Otoroshi -- the plugin `Otoroshi API Portal` will appear in the available plugins list
+3. Restart Otoroshi -- the plugins `Otoroshi API Portal` (one API) and `Otoroshi API Portal Catalog` (several APIs) will appear in the available plugins list
 
 ## Setup
 
@@ -205,7 +214,7 @@ The plugins serve different roles:
 | Field | Type | Description |
 |---|---|---|
 | `api_ref` | `string` | **Required**. The ID of the Otoroshi API whose documentation will be rendered |
-| `prefix` | `string` | Optional path prefix if the portal is not served at the root of the domain (e.g. `/portal`) |
+| `prefix` | `string` | Optional path prefix if the portal is not served at the root of the domain (e.g. `/portal`). The paths of the documentation (`/docs/...` in its links, its navigation, its redirections) are then served under it |
 
 ## Documentation format reference
 
@@ -383,6 +392,67 @@ The developer then shows a key again, renames it, disables it, or revokes it (it
 
 A `/logout` -> `/.well-known/otoroshi/logout` redirection is always added automatically.
 
+The paths of the documentation (the `from` and `to` of the redirections, the links of the navigation, the `/...` links and images of the pages) are relative to the portal: with a `prefix`, or in a catalog, they are served under it.
+
+A documentation loaded from a remote `source` is kept 15 seconds before it is fetched again.
+
+## Catalog of APIs
+
+A second plugin, `OtoroshiApiPortalCatalog`, serves one portal for several APIs:
+
+- a home with the APIs (their name, version, description, plans, tags) and a search by text or tag
+- **My keys** for all the APIs: a developer takes a key of any plan of any API, and sees, shows, edits and revokes all their keys in one place
+- the portal of each API under `/apis/<slug>`: the very same pages as the portal of a single API (guides, API reference with *Try it*, keys of this API), with the top bar of the catalog and the API in a breadcrumb
+
+### The catalog route
+
+The same chain as the portal of a single API, with the catalog plugin instead:
+
+```json
+{
+  "frontend": { "domains": ["developers.example.com"], "strip_path": true, "exact": false },
+  "backend": { "targets": [{ "hostname": "request.otoroshi.io", "port": 443, "tls": true }] },
+  "plugins": [
+    { "plugin": "cp:otoroshi.next.plugins.OverrideHost", "enabled": true, "config": {} },
+    { "plugin": "cp:otoroshi.next.plugins.NgAuthModuleUserExtractor", "enabled": true, "config": { "module": "<your-auth-module-id>" } },
+    { "plugin": "cp:otoroshi.next.plugins.AuthModule", "enabled": true, "include": ["/login"], "config": { "module": "<your-auth-module-id>" } },
+    {
+      "plugin": "cp:otoroshi_plugins.com.cloud.apim.plugins.apiportal.OtoroshiApiPortalCatalog",
+      "enabled": true,
+      "config": {
+        "title": "Acme developers",
+        "description": "Every public API of Acme, and your keys for all of them.",
+        "tags": ["public"],
+        "accent": "#0d9488",
+        "links": [{ "label": "Status", "url": "https://status.example.com" }],
+        "footer": "Acme · the public APIs"
+      }
+    }
+  ]
+}
+```
+
+### Catalog configuration
+
+| Field | Type | Description |
+|---|---|---|
+| `prefix` | `string` | Optional path prefix if the catalog is not served at the root of the domain |
+| `api_refs` | `string[]` | The ids of the APIs of the catalog |
+| `tags` | `string[]` | The APIs with all these tags |
+| `metadata` | `object` | The APIs with all these metadata |
+| `title` | `string` | The name of the catalog (`Developer portal` by default) |
+| `description` | `string` | The pitch of its home |
+| `logo` | `string` | The address of its logo |
+| `theme` | `string` | `system` (default), `light` or `dark` |
+| `toggle` | `boolean` | `false` hides the light / dark button |
+| `accent` | `string` | The accent color, like `#0d9488` |
+| `links` | `object[]` | Links of the top bar: `[{ "label": "...", "url": "https://..." }]` |
+| `footer` | `string` | The text of the footer |
+
+An API is in the catalog when it is listed in `api_refs`, or when it has all the `tags` and `metadata` given (every API when none of the three is given), and when it is published (or deprecated), has an enabled `documentation`, and is not `private` (unless listed by id). Its slug is the `portal.slug` metadata of its documentation (or of the API), or its name.
+
+The look of the catalog (theme, accent, links, logo) applies to the portals of its APIs; the other settings of each API (`portal.title`, `portal.description`, `portal.reference.*`, `portal.keys.per_user`, its footer and banner) still apply to its own pages. A developer signs in once, at the catalog.
+
 ## Full example
 
 Here is a complete documentation section for a Wine API portal with multiple documentation pages and a single OpenAPI spec (the plans are the ones of the API):
@@ -511,7 +581,9 @@ The portal exposes the following routes internally:
 | `DELETE` | `/api/apikeys/<id>` | Revoke a key |
 | any | `/api/_proxy?scalar_url=<url>` | The requests of the reference, to the hosts of the API only |
 
-`<id>` is the id of the subscription of the key (or the client id of its API key). The writes need a signed in developer and the `X-Otoroshi-Api-Portal: 1` header (sent by the pages of the portal, never by a foreign form).
+`<id>` is the id of the subscription of the key (or the client id of its API key).
+
+The catalog serves `/`, `/keys`, `/login`, `/logout`, `/_portal/<file>`, `/api/session` (the developer, the APIs and plans they take keys of), `/api/apis` (its APIs) and `/api/apikeys` (the keys of the developer for all its APIs), and the routes above for each API under `/apis/<slug>`. The writes need a signed in developer and the `X-Otoroshi-Api-Portal: 1` header (sent by the pages of the portal, never by a foreign form).
 
 The pages load [Scalar](https://github.com/scalar/scalar), [marked](https://marked.js.org/) and [highlight.js](https://highlightjs.org/) from jsDelivr, at fixed versions, and the Plus Jakarta Sans font from Google Fonts.
 

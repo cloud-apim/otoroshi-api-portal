@@ -2,7 +2,7 @@ package otoroshi_plugins.com.cloud.apim.plugins.apiportal
 
 import org.apache.pekko.util.ByteString
 import otoroshi.env.Env
-import otoroshi.models.RemainingQuotas
+import otoroshi.models.{PrivateAppsUser, RemainingQuotas}
 import otoroshi.next.models.*
 import otoroshi.next.plugins.api.NgbBackendCallContext
 import otoroshi.utils.http.RequestImplicits.EnhancedRequestHeader
@@ -112,10 +112,24 @@ object PortalSettings {
   }
 }
 
-/** What a request of the portal is about: the API, its documentation, the visitor, the settings. */
-case class Portal(api: Api, doc: ApiDocumentation, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig)(using env: Env) {
+/** The plans of an API on its portal: the published ones that are not private, and the ones a developer takes a key of. */
+object PortalPlans {
+  def shown(api: Api): Seq[ApiPlan] =
+    api.plans.filter(p => p.status == ApiPlanStatus.Published && p.visibility.kind != ApiDocumentationPlanVisibilityKind.Private)
+  def withKeys(api: Api): Seq[ApiPlan] = shown(api).filter(_.accessModeConfigurationType == "apikey")
+}
+
+/** A catalog around the portals of its APIs (see OtoroshiApiPortalCatalog): where it is, its look, its logo, its footer. */
+case class CatalogSite(prefix: String, settings: PortalSettings, logoSrc: Option[String], footer: Option[String], keysEnabled: Boolean)
+
+/** What a request of the portal is about: the API, its documentation, the visitor, the settings, the catalog around it. */
+case class Portal(api: Api, doc: ApiDocumentation, ctx: NgbBackendCallContext, config: OtoroshiApiPortalConfig, catalog: Option[CatalogSite] = None)(using env: Env) {
   val prefix: String           = config.prefix.getOrElse("")
+  // where the site starts: the catalog around the portal, or the portal itself (its /login, its /logout, its files)
+  val rootPrefix: String       = catalog.map(_.prefix).getOrElse(prefix)
   lazy val settings            = PortalSettings(api, doc)
+  // the look of the pages: the one of the catalog around the portal
+  lazy val look: PortalSettings = catalog.map(_.settings).getOrElse(settings)
   // the path under the portal, as asked, and in lower case to find what it serves
   lazy val rawPath: String     = {
     val p = ctx.request.path
@@ -123,12 +137,11 @@ case class Portal(api: Api, doc: ApiDocumentation, ctx: NgbBackendCallContext, c
   }
   lazy val path: String        = rawPath.toLowerCase()
   def user                     = ctx.user
-  // the plans shown on the portal (published, not private), and the ones a developer takes a key of
-  lazy val plans: Seq[ApiPlan] = api.plans.filter(p => p.status == ApiPlanStatus.Published && p.visibility.kind != ApiDocumentationPlanVisibilityKind.Private)
-  lazy val keyPlans: Seq[ApiPlan] = plans.filter(_.accessModeConfigurationType == "apikey")
+  lazy val plans: Seq[ApiPlan] = PortalPlans.shown(api)
+  lazy val keyPlans: Seq[ApiPlan] = PortalPlans.withKeys(api)
   def keysEnabled: Boolean     = keyPlans.nonEmpty
-  def loginUrl(back: String): String = s"$prefix/login?redirect=${URLEncoder.encode(back, StandardCharsets.UTF_8)}"
-  def logoutUrl: String        = s"$prefix/logout"
+  def loginUrl(back: String): String = s"$rootPrefix/login?redirect=${URLEncoder.encode(back, StandardCharsets.UTF_8)}"
+  def logoutUrl: String        = s"$rootPrefix/logout"
   // where the API answers, through the gateway: its domain, with the scheme and the port the portal is read with
   lazy val gatewayUrl: Option[String] = Option(api.domain).map(_.trim.stripSuffix("/")).filter(_.nonEmpty).map { domain =>
     val port = ctx.rawRequest.theHost.split(":").lift(1).filter(_ => !domain.contains(":")).map(p => s":$p").getOrElse("")
@@ -137,6 +150,28 @@ case class Portal(api: Api, doc: ApiDocumentation, ctx: NgbBackendCallContext, c
   // a link of the documentation: under the portal when it is one of its paths
   def href(link: String): String = if (link.startsWith("/") && !link.startsWith("//")) s"$prefix$link" else link
 }
+
+/** What every page shows around its content: the site it belongs to (a portal, or a catalog), its top bar, its footer. */
+case class PortalChrome(
+    rootPrefix: String,
+    homeHref: String,
+    title: String,
+    description: Option[String],
+    look: PortalSettings,
+    logoSrc: Option[String],
+    logoHtml: Option[String],
+    // inside a catalog: the API the page is about (its name, its home)
+    crumb: Option[(String, String)],
+    // the tabs of the top bar: label, href, active
+    tabs: Seq[(String, String, Boolean)],
+    user: Option[PrivateAppsUser],
+    keysHref: Option[String],
+    signInHref: Option[String],
+    keyPicker: Boolean,
+    bannerHtml: Option[String],
+    footerHtml: String,
+    needsIcons: Boolean
+)
 
 object PortalPages {
 
@@ -249,90 +284,136 @@ object PortalPages {
 
   /* ---------- the layout ---------- */
 
-  def layout(
-      portal: Portal,
+  // a resource of the documentation shown as is: html when its content type says so, text otherwise
+  private def textOf(resource: Option[ApiDocumentationResource]): Option[String] = resource.flatMap { r =>
+    r.text_content.map(text => if (r.contentType.startsWith("text/html")) text else esc(text))
+  }
+
+  /** The chrome of a page of the portal of an API: its own, or the one of the catalog around it. */
+  def portalChrome(portal: Portal, kind: String): PortalChrome = {
+    val doc     = portal.doc
+    val prefix  = portal.prefix
+    val logo    = doc.logo
+    val logoSrc = logo.path.headOption
+      .filter(_ => logo.url.isDefined || logo.raw.select("base64_content").asOpt[String].isDefined)
+      .map(p => s"$prefix$p")
+      .orElse(logo.resolveUrl(doc))
+    val tabs    = doc.navigation.map { nav =>
+      (nav.label, portal.href(nav.path.headOption.getOrElse("#")), nav.path.exists(p => portal.path.startsWith(p.toLowerCase)))
+    } ++ Seq(("API reference", s"$prefix/api-references", kind == "reference" || kind == "references")) ++
+      (if (portal.keysEnabled) Seq(("My keys", s"$prefix/keys", kind == "keys")) else Seq.empty)
+    val signIn  = Some(portal.loginUrl(s"$prefix${portal.rawPath}")).filter(_ => portal.user.isEmpty && portal.keysEnabled && kind != "reference" && kind != "keys")
+    val banner  = textOf(doc.banner).map(html => s"""<div class="banner"><div class="banner-inner">$html</div></div>""")
+    val icons   = Json.stringify(doc.json).contains("\"bi ")
+    portal.catalog match {
+      case Some(catalog) =>
+        PortalChrome(
+          rootPrefix = catalog.prefix,
+          homeHref = s"${catalog.prefix}/",
+          title = catalog.settings.title,
+          description = portal.settings.description,
+          look = catalog.settings,
+          logoSrc = catalog.logoSrc,
+          logoHtml = None,
+          crumb = Some((portal.settings.title, s"$prefix/")),
+          tabs = tabs,
+          user = portal.user,
+          keysHref = Some(s"${catalog.prefix}/keys").filter(_ => catalog.keysEnabled),
+          signInHref = signIn,
+          keyPicker = kind == "reference" && portal.keysEnabled,
+          bannerHtml = banner,
+          footerHtml = textOf(doc.footer).orElse(catalog.footer.map(esc)).getOrElse(esc(catalog.settings.title)),
+          needsIcons = icons
+        )
+      case None =>
+        PortalChrome(
+          rootPrefix = prefix,
+          homeHref = s"$prefix/",
+          title = portal.settings.title,
+          description = portal.settings.description,
+          look = portal.settings,
+          logoSrc = logoSrc,
+          logoHtml = Some(renderIcon(Some(logo), doc)).filter(_ => logo.css_icon_class.isDefined),
+          crumb = None,
+          tabs = tabs,
+          user = portal.user,
+          keysHref = Some(s"$prefix/keys").filter(_ => portal.keysEnabled),
+          signInHref = signIn,
+          keyPicker = kind == "reference" && portal.keysEnabled,
+          bannerHtml = banner,
+          footerHtml = textOf(doc.footer).getOrElse(esc(portal.settings.title)),
+          needsIcons = icons
+        )
+    }
+  }
+
+  def layout(portal: Portal, kind: String, pageTitle: Option[String], body: String, data: JsObject = Json.obj(), markdown: Boolean = false): String =
+    page(portalChrome(portal, kind), portal.prefix, kind, pageTitle, body, data, markdown)
+
+  /** A page: its chrome around its body, `prefix` the place of the portal (or catalog) the scripts of the page ask. */
+  def page(
+      chrome: PortalChrome,
+      prefix: String,
       kind: String,
       pageTitle: Option[String],
       body: String,
       data: JsObject = Json.obj(),
       markdown: Boolean = false
   ): String = {
-    val settings = portal.settings
-    val doc      = portal.doc
-    val prefix   = portal.prefix
-    val title    = settings.title
-    val logo     = doc.logo
-    val logoSrc  = logo.path.headOption
-      .filter(_ => logo.url.isDefined || logo.raw.select("base64_content").asOpt[String].isDefined)
-      .map(p => s"$prefix$p")
-      .orElse(logo.resolveUrl(doc))
-    val brandMark = logoSrc match {
-      case Some(src)                           => s"""<img src="${esc(src)}" alt="">"""
-      case None if logo.css_icon_class.isDefined => s"""<span class="mark">${renderIcon(Some(logo), doc)}</span>"""
-      case None                                => s"""<span class="mark">${esc(Some(title.trim.take(1).toUpperCase).filter(_.nonEmpty).getOrElse("A"))}</span>"""
+    val look      = chrome.look
+    val title     = chrome.title
+    val name      = chrome.crumb.map(_._1).getOrElse(title)
+    val brandMark = (chrome.logoSrc, chrome.logoHtml) match {
+      case (Some(src), _)  => s"""<img src="${esc(src)}" alt="">"""
+      case (None, Some(h)) => s"""<span class="mark">$h</span>"""
+      case _               => s"""<span class="mark">${esc(Some(title.trim.take(1).toUpperCase).filter(_.nonEmpty).getOrElse("A"))}</span>"""
     }
-    val navLinks   = doc.navigation.map { nav =>
-      val active = nav.path.exists(p => portal.path.startsWith(p.toLowerCase))
-      s"""<a href="${esc(portal.href(nav.path.headOption.getOrElse("#")))}"${if (active) " class=\"active\"" else ""}>${esc(nav.label)}</a>"""
-    }
-    val referenceLink = s"""<a href="${esc(prefix)}/api-references"${if (kind == "reference" || kind == "references") " class=\"active\"" else ""}>API reference</a>"""
-    val keysLink      = if (portal.keysEnabled) s"""<a href="${esc(prefix)}/keys"${if (kind == "keys") " class=\"active\"" else ""}>My keys</a>""" else ""
-    val userMenu      = portal.user match {
+    val tabs      = chrome.tabs.map { case (label, href, active) => s"""<a href="${esc(href)}"${if (active) " class=\"active\"" else ""}>${esc(label)}</a>""" }
+    val userMenu  = chrome.user match {
       case Some(user) =>
         val initial = Option(user.name).flatMap(_.trim.headOption).orElse(Option(user.email).flatMap(_.trim.headOption)).map(_.toUpper.toString).getOrElse("U")
         s"""<details class="user-menu"><summary><span class="avatar">${esc(initial)}</span><span class="user-name">${esc(user.name)}</span></summary>
-           |<div class="user-menu-panel"><strong>${esc(user.name)}</strong><span class="muted">${esc(user.email)}</span>${if (portal.keysEnabled) s"""<a href="${esc(prefix)}/keys">My keys</a>""" else ""}<a href="${esc(portal.logoutUrl)}">Sign out</a></div></details>""".stripMargin
-      case None if portal.keysEnabled && kind != "reference" && kind != "keys" =>
-        s"""<a class="signin-link" href="${esc(portal.loginUrl(s"$prefix${portal.rawPath}"))}">Sign in</a>"""
-      case None => ""
+           |<div class="user-menu-panel"><strong>${esc(user.name)}</strong><span class="muted">${esc(user.email)}</span>${chrome.keysHref.map(h => s"""<a href="${esc(h)}">My keys</a>""").getOrElse("")}<a href="${esc(chrome.rootPrefix)}/logout">Sign out</a></div></details>""".stripMargin
+      case None => chrome.signInHref.map(h => s"""<a class="signin-link" href="${esc(h)}">Sign in</a>""").getOrElse("")
     }
-    val needsIcons  = Json.stringify(doc.json).contains("\"bi ")
-    val banner      = doc.banner.flatMap(_.text_content).map { text =>
-      val html = if (doc.banner.exists(_.contentType.startsWith("text/html"))) text else esc(text)
-      s"""<div class="banner"><div class="banner-inner">$html</div></div>"""
-    }
-    val footerText  = doc.footer.flatMap(_.text_content).map { text =>
-      if (doc.footer.exists(_.contentType.startsWith("text/html"))) text else esc(text)
-    }.getOrElse(esc(title))
+    val linkOf    = (url: String) => if (url.startsWith("/") && !url.startsWith("//")) s"${chrome.rootPrefix}$url" else url
     s"""<!doctype html>
-       |<html lang="en" data-default-theme="${settings.theme}"${if (settings.locked) s""" data-theme="${settings.theme}" data-locked""" else ""}>
+       |<html lang="en" data-default-theme="${look.theme}"${if (look.locked) s""" data-theme="${look.theme}" data-locked""" else ""}>
        |<head>
        |<meta charset="utf-8">
        |<meta name="viewport" content="width=device-width, initial-scale=1">
-       |<title>${esc(pageTitle.map(t => s"$t · $title").getOrElse(title))}</title>
-       |${settings.description.map(d => s"""<meta name="description" content="${esc(d)}">""").getOrElse("")}
-       |${logoSrc.map(src => s"""<link rel="icon" href="${esc(src)}">""").getOrElse("")}
-       |<script src="${PortalAssets.url(prefix, "theme.js")}"></script>
+       |<title>${esc(pageTitle.map(t => s"$t · $name").getOrElse(if (name == title) title else s"$name · $title"))}</title>
+       |${chrome.description.map(d => s"""<meta name="description" content="${esc(d)}">""").getOrElse("")}
+       |${chrome.logoSrc.map(src => s"""<link rel="icon" href="${esc(src)}">""").getOrElse("")}
+       |<script src="${PortalAssets.url(chrome.rootPrefix, "theme.js")}"></script>
        |<link rel="preconnect" href="https://fonts.googleapis.com">
        |<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
        |<link rel="stylesheet" href="${PortalAssets.font}">
-       |${if (needsIcons) s"""<link rel="stylesheet" href="${PortalAssets.bootstrapIcons}">""" else ""}
-       |<link rel="stylesheet" href="${PortalAssets.url(prefix, "portal.css")}">
-       |${settings.accent.map(a => s"<style>:root{--accent:$a}</style>").getOrElse("")}
+       |${if (chrome.needsIcons) s"""<link rel="stylesheet" href="${PortalAssets.bootstrapIcons}">""" else ""}
+       |<link rel="stylesheet" href="${PortalAssets.url(chrome.rootPrefix, "portal.css")}">
+       |${look.accent.map(a => s"<style>:root{--accent:$a}</style>").getOrElse("")}
        |</head>
        |<body class="page-$kind">
-       |${banner.getOrElse("")}
+       |${chrome.bannerHtml.getOrElse("")}
        |<header class="topbar"><div class="topbar-inner">
-       |<a class="brand" href="${esc(prefix)}/">$brandMark<span>${esc(title)}</span></a>
+       |<div class="site${if (chrome.crumb.isDefined) " has-crumb" else ""}"><a class="brand" href="${esc(chrome.homeHref)}">$brandMark<span>${esc(title)}</span></a>${chrome.crumb.map { case (label, href) => s"""<span class="crumb-sep">/</span><a class="crumb" href="${esc(href)}">${esc(label)}</a>""" }.getOrElse("")}</div>
        |<nav class="topnav">
-       |${navLinks.mkString("\n")}
-       |$referenceLink
-       |$keysLink
+       |${tabs.mkString("\n")}
        |</nav>
        |<div class="spacer"></div>
-       |<div class="toplinks">${settings.links.map { case (label, url) => s"""<a href="${esc(portal.href(url))}"${if (url.startsWith("http")) " target=\"_blank\" rel=\"noopener noreferrer\"" else ""}>${esc(label)}</a>""" }.mkString}</div>
-       |${if (kind == "reference" && portal.keysEnabled) """<div class="key-picker" id="key-picker"></div>""" else ""}
-       |${if (settings.toggle) s"""<button class="icon-btn" id="theme-toggle" type="button" aria-label="Light or dark">${ICONS("sun")}${ICONS("moon")}</button>""" else ""}
+       |<div class="toplinks">${look.links.map { case (label, url) => s"""<a href="${esc(linkOf(url))}"${if (url.startsWith("http")) " target=\"_blank\" rel=\"noopener noreferrer\"" else ""}>${esc(label)}</a>""" }.mkString}</div>
+       |${if (chrome.keyPicker) """<div class="key-picker" id="key-picker"></div>""" else ""}
+       |${if (look.toggle) s"""<button class="icon-btn" id="theme-toggle" type="button" aria-label="Light or dark">${ICONS("sun")}${ICONS("moon")}</button>""" else ""}
        |$userMenu
        |<button class="icon-btn menu-btn" id="menu-toggle" type="button" aria-label="Menu">${ICONS("menu")}</button>
        |</div></header>
        |<main>
        |$body
        |</main>
-       |${if (kind == "reference") "" else s"""<footer class="footer"><div class="footer-inner"><span>$footerText</span><span>Powered by <a href="https://www.otoroshi.io" target="_blank" rel="noopener noreferrer">Otoroshi</a> &amp; <a href="https://www.cloud-apim.com" target="_blank" rel="noopener noreferrer">Cloud APIM</a></span></div></footer>"""}
-       |<script type="application/json" id="portal-data">${jsonInPage(Json.obj("prefix" -> prefix) ++ data)}</script>
+       |${if (kind == "reference") "" else s"""<footer class="footer"><div class="footer-inner"><span>${chrome.footerHtml}</span><span>Powered by <a href="https://www.otoroshi.io" target="_blank" rel="noopener noreferrer">Otoroshi</a> &amp; <a href="https://www.cloud-apim.com" target="_blank" rel="noopener noreferrer">Cloud APIM</a></span></div></footer>"""}
+       |<script type="application/json" id="portal-data">${jsonInPage(Json.obj("prefix" -> prefix, "root" -> chrome.rootPrefix) ++ data)}</script>
        |${if (markdown) s"""<script src="${PortalAssets.marked}" defer></script>\n<script src="${PortalAssets.highlight}" defer></script>""" else ""}
-       |<script src="${PortalAssets.url(prefix, "portal.js")}" defer></script>
+       |<script src="${PortalAssets.url(chrome.rootPrefix, "portal.js")}" defer></script>
        |</body>
        |</html>""".stripMargin
   }
@@ -462,7 +543,7 @@ object PortalPages {
     val settings = portal.settings
     val css      = Seq(
       ".scalar-app { --scalar-font: 'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif; --scalar-font-code: ui-monospace, 'JetBrains Mono', Menlo, monospace; --scalar-custom-header-height: 64px; }",
-      settings.accent.map(a => s".light-mode, .dark-mode { --scalar-color-accent: $a; }").getOrElse(""),
+      portal.look.accent.map(a => s".light-mode, .dark-mode { --scalar-color-accent: $a; }").getOrElse(""),
       if (Seq("default", "none").contains(settings.referenceTheme))
         ".dark-mode { --scalar-background-1: #0a0d12; --scalar-background-2: #10151c; --scalar-background-3: #131922; --scalar-border-color: #1f2731; }"
       else ""

@@ -102,6 +102,31 @@ object OtoroshiApiPortalConfig {
   }
 }
 
+/**
+ * The documentations of the APIs, resolved: the ones loaded from a remote `source` kept a few seconds, not fetched again
+ * for each page (a catalog shows many APIs at once).
+ */
+object DocumentationCache {
+  private val ttl   = 15000L
+  private val cache = new TrieMap[String, (Long, Option[ApiDocumentation])]()
+
+  def resolve(api: Api)(using env: Env, ec: ExecutionContext): Future[Option[ApiDocumentation]] = api.documentation match {
+    case Some(doc) if doc.source.isDefined =>
+      val key = s"${api.id}:${Json.stringify(doc.json).hashCode}"
+      val now = System.currentTimeMillis()
+      cache.get(key) match {
+        case Some((at, resolved)) if at > now - ttl => resolved.vfuture
+        case _ =>
+          api.resolveDocumentation().map { resolved =>
+            cache.filterInPlace { case (_, (at, _)) => at > now - ttl }
+            cache.put(key, (now, resolved))
+            resolved
+          }
+      }
+    case other => other.vfuture
+  }
+}
+
 class OtoroshiApiPortal extends NgBackendCall {
 
   override def useDelegates: Boolean = false
@@ -141,13 +166,7 @@ class OtoroshiApiPortal extends NgBackendCall {
       case None => Results.NotFound("API ref not found").asBackendCall.vfuture
       case Some(ref) => env.datastores.apiDataStore.findById(ref) flatMap {
         case None => Results.NotFound("API not found").asBackendCall.vfuture
-        case Some(api) => api
-          .applyOnIf(api.metadata.get("doc_template").contains("wines"))(_.copy(documentation = ApiDocumentationExample.wines.some))
-          .applyOnIf(api.metadata.get("doc_template").contains("remote"))(_.copy(documentation = ApiDocumentationExample.remote.some))
-          .applyOnIf(api.metadata.get("doc_template").contains("remote_test"))(_.copy(documentation = ApiDocumentationExample.remoteTest.some))
-          .applyOnIf(api.metadata.get("doc_template").contains("remote_wines"))(_.copy(documentation = ApiDocumentationExample.remoteWines.some))
-          .applyOnIf(api.metadata.get("doc_template").contains("test"))(_.copy(documentation = ApiDocumentationExample.value.some))
-          .resolveDocumentation() flatMap {
+        case Some(api) => DocumentationCache.resolve(OtoroshiApiPortal.withExample(api)) flatMap {
             case Some(doc) if doc.enabled => OtoroshiApiPortal.route(Portal(api, doc, ctx, config)).asBackendCall
             case _ => Results.NotFound("API doc not found").asBackendCall.vfuture
           }
@@ -162,6 +181,14 @@ object OtoroshiApiPortal {
 
   /** The security scheme the portal adds to the specifications: the API keys of the developers, as bearer tokens. */
   val securityScheme = "otoroshi_apikey"
+
+  /** The built-in examples of documentation (the `doc_template` metadata of an API), to try the portal. */
+  def withExample(api: Api): Api = api
+    .applyOnIf(api.metadata.get("doc_template").contains("wines"))(_.copy(documentation = ApiDocumentationExample.wines.some))
+    .applyOnIf(api.metadata.get("doc_template").contains("remote"))(_.copy(documentation = ApiDocumentationExample.remote.some))
+    .applyOnIf(api.metadata.get("doc_template").contains("remote_test"))(_.copy(documentation = ApiDocumentationExample.remoteTest.some))
+    .applyOnIf(api.metadata.get("doc_template").contains("remote_wines"))(_.copy(documentation = ApiDocumentationExample.remoteWines.some))
+    .applyOnIf(api.metadata.get("doc_template").contains("test"))(_.copy(documentation = ApiDocumentationExample.value.some))
 
   def route(portal: Portal)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
     val method = portal.ctx.request.method.toLowerCase()
@@ -183,7 +210,7 @@ object OtoroshiApiPortal {
       case ("get", "/subscriptions" | "/subscriptions/apikeys")                  => Results.Redirect(s"${portal.prefix}/keys", 303).vfuture
       case ("get", "/api-references")                                            => serveReferences(portal)
       case ("get", path) if path.startsWith("/api-references/")                 => serveReference(portal, portal.rawPath.substring("/api-references".length))
-      case ("get", "/login")                                                     => redirectAfterLogin(portal)
+      case ("get", "/login")                                                     => redirectAfterLogin(portal.ctx, s"${portal.prefix}/")
       case ("get", "/" | "")                                                     => serveHome(portal)
       case ("get", _)                                                            => serveResource(portal)
       case _                                                                     => Results.NotFound(Json.obj("error" -> "not found")).vfuture
@@ -193,15 +220,17 @@ object OtoroshiApiPortal {
   /* ---------- the pages ---------- */
 
   def handleRedirections(portal: Portal)(f: => Future[Result])(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
-    (portal.doc.redirections :+ ApiDocumentationRedirection(Json.obj("from" -> "/logout", "to" -> "/.well-known/otoroshi/logout"))).find(_.from.toLowerCase == portal.path) match {
-      case Some(redirection) => Results.Redirect(redirection.to, 303).vfuture
+    // (a path of the documentation: under the portal)
+    val redirections = portal.doc.redirections.map(r => (r.from, portal.href(r.to))) :+ ("/logout" -> "/.well-known/otoroshi/logout")
+    redirections.find(_._1.toLowerCase == portal.path) match {
+      case Some((_, to)) => Results.Redirect(to, 303).vfuture
       case None => f
     }
   }
 
   // back where the developer signed in from (a path of this site only)
-  def redirectAfterLogin(portal: Portal)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Result] = {
-    val to = portal.ctx.request.queryParam("redirect").filter(r => r.startsWith("/") && !r.startsWith("//") && !r.startsWith("/\\")).getOrElse(s"${portal.prefix}/")
+  def redirectAfterLogin(ctx: NgbBackendCallContext, home: String): Future[Result] = {
+    val to = ctx.request.queryParam("redirect").filter(r => r.startsWith("/") && !r.startsWith("//") && !r.startsWith("/\\")).getOrElse(home)
     Results.Redirect(to, 303).vfuture
   }
 
@@ -462,7 +491,7 @@ object OtoroshiApiPortal {
     Results.Ok(Json.obj(
       "user" -> portal.user.map(u => Json.obj("name" -> u.name, "email" -> u.email)),
       "plans" -> JsArray(portal.keyPlans.map(planJson)),
-      "login_url" -> s"${portal.prefix}/login",
+      "login_url" -> s"${portal.rootPrefix}/login",
       "logout_url" -> portal.logoutUrl,
       "per_user" -> portal.settings.keysPerUser,
     )).withHeaders("Cache-Control" -> "no-store").vfuture

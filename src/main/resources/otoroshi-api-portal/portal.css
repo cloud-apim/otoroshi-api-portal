@@ -128,6 +128,29 @@ kbd {
   font-size: 14px;
   font-weight: 800;
 }
+.site {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.crumb-sep {
+  color: var(--border-strong);
+  font-size: 22px;
+  font-weight: 300;
+}
+.crumb {
+  overflow: hidden;
+  color: var(--fg);
+  font-size: 15px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.crumb:hover {
+  color: var(--accent);
+  text-decoration: none;
+}
 .topnav {
   display: flex;
   gap: 4px;
@@ -508,6 +531,44 @@ a.card:hover {
 .card .facts span:last-child {
   color: var(--fg);
   font-weight: 600;
+}
+.card[hidden] {
+  display: none;
+}
+
+/* ---------- the catalog ---------- */
+
+.catalog-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 20px;
+}
+.catalog-tools input {
+  flex: 1;
+  min-width: 220px;
+  max-width: 420px;
+  height: 42px;
+  padding: 0 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--bg-raised);
+  color: var(--fg);
+  font: inherit;
+}
+.catalog-tools input:focus {
+  outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  outline-offset: 1px;
+}
+button.badge {
+  background: transparent;
+  font-family: inherit;
+  cursor: pointer;
+}
+.card .tags {
+  color: var(--muted);
+  font-size: 13px;
 }
 .intro {
   margin-bottom: 56px;
@@ -1126,6 +1187,9 @@ button.button {
     display: none;
   }
   .user-menu summary .user-name {
+    display: none;
+  }
+  .site.has-crumb .brand span {
     display: none;
   }
   .key-list li {
